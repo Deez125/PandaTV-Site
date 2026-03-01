@@ -1045,10 +1045,13 @@ async function handleGetPlexServers(request) {
     });
 
     if (!response.ok) {
-      throw new Error('Failed to fetch Plex servers');
+      const errorText = await response.text();
+      console.error('Plex.tv API error:', response.status, errorText);
+      throw new Error(`Plex API returned ${response.status}: ${errorText}`);
     }
 
     const servers = await response.json();
+    console.log('Fetched servers from Plex.tv:', servers.length, 'resources');
 
     // Filter for servers with 'Plex Media Server' product type
     const plexServers = servers
@@ -1076,10 +1079,12 @@ async function handleGetPlexServers(request) {
       }))
       .filter(server => server.connections.length > 0);
 
+    console.log('Filtered to', plexServers.length, 'Plex Media Servers');
     return jsonResponse({ servers: plexServers });
   } catch (error) {
     console.error('Error fetching Plex servers:', error);
-    return errorResponse('Failed to fetch Plex servers', 500);
+    console.error('Error stack:', error.stack);
+    return errorResponse(`Failed to fetch Plex servers: ${error.message}`, 500);
   }
 }
 
