@@ -1773,17 +1773,23 @@ async function handleGetPlexFeatured(request, env) {
     // Pick a random item
     const featuredItem = items[Math.floor(Math.random() * items.length)];
 
+    // For episodes, use the show's title, art, and genres
+    const isEpisode = featuredItem.type === 'episode';
+    const title = isEpisode ? featuredItem.grandparentTitle : featuredItem.title;
+    const artPath = isEpisode && featuredItem.grandparentArt ? featuredItem.grandparentArt : featuredItem.art;
+    const thumbPath = isEpisode && featuredItem.grandparentThumb ? featuredItem.grandparentThumb : featuredItem.thumb;
+
     // Format the response
     const formatted = {
       id: featuredItem.ratingKey,
-      title: featuredItem.title,
-      type: featuredItem.type, // movie or show
+      title: title,
+      type: featuredItem.type, // movie, show, or episode
       year: featuredItem.year,
       summary: featuredItem.summary,
       rating: featuredItem.contentRating,
       genres: featuredItem.Genre?.map(g => g.tag) || [],
-      thumb: featuredItem.thumb ? `${plexConnection.plex_server_url}${featuredItem.thumb}?X-Plex-Token=${plexConnection.plex_token}` : null,
-      art: featuredItem.art ? `${plexConnection.plex_server_url}${featuredItem.art}?X-Plex-Token=${plexConnection.plex_token}` : null,
+      thumb: thumbPath ? `${plexConnection.plex_server_url}${thumbPath}?X-Plex-Token=${plexConnection.plex_token}` : null,
+      art: artPath ? `${plexConnection.plex_server_url}${artPath}?X-Plex-Token=${plexConnection.plex_token}` : null,
     };
 
     return jsonResponse({ featured: formatted });
