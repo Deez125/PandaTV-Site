@@ -21,7 +21,7 @@ PLEX_MACHINE_ID = "your-machine-id"
 
 # App
 ADMIN_API_KEY = "panda-admin-key-placeholder"
-FRONTEND_URL = "http://localhost:6969"
+FRONTEND_URL = "https://novix.tv"
 
 # Tautulli (optional) - UPDATE OR REMOVE
 TAUTULLI_URL = "http://your-tautulli:8181"

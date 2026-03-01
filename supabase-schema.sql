@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS public.plex_connections (
   plex_email TEXT,
   plex_avatar_url TEXT,
   plex_token TEXT,
+  plex_server_url TEXT,
+  plex_server_name TEXT,
+  plex_server_machine_id TEXT,
   connected_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   UNIQUE(user_id) -- One Plex connection per user

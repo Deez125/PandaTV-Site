@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth, startPlexAuth, checkPlexAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import IptvTestModal from '../components/IptvTestModal';
+import PlexServerSelectionModal from '../components/PlexServerSelectionModal';
 
 export default function Account() {
   const { user, signOut } = useAuth();
@@ -14,6 +15,8 @@ export default function Account() {
   const [plexConnecting, setPlexConnecting] = useState(false);
   const [plexError, setPlexError] = useState('');
   const [pollInterval, setPollInterval] = useState(null);
+  const [showServerSelection, setShowServerSelection] = useState(false);
+  const [plexAuthData, setPlexAuthData] = useState(null);
 
   // IPTV connection state
   const [showIptvForm, setShowIptvForm] = useState(false);
@@ -104,43 +107,16 @@ export default function Account() {
             clearInterval(interval);
             setPollInterval(null);
 
-            // First get the user's id from the users table
-            const { data: userRecord, error: userError } = await supabase
-              .from('users')
-              .select('id')
-              .eq('auth_id', user.id)
-              .single();
-
-            if (userError) {
-              console.error('Error fetching user record:', userError);
-              setPlexError('Failed to save Plex connection');
-              setPlexConnecting(false);
-              return;
-            }
-
-            // Upsert Plex connection to separate table
-            const { error } = await supabase
-              .from('plex_connections')
-              .upsert({
-                user_id: userRecord.id,
-                plex_user_id: checkData.plex_user.id,
-                plex_username: checkData.plex_user.username,
-                plex_email: checkData.plex_user.email,
-                plex_avatar_url: checkData.plex_user.thumb,
-                plex_token: checkData.plex_user.authToken || null,
-                connected_at: new Date().toISOString(),
-              }, {
-                onConflict: 'user_id'
-              });
-
-            if (error) {
-              console.error('Error saving Plex connection:', error);
-              setPlexError('Failed to save Plex connection');
-            } else {
-              // Refresh user data
-              await fetchUserData();
-            }
-
+            // Store Plex auth data and show server selection modal
+            setPlexAuthData({
+              userId: user.id,
+              plexUserId: checkData.plex_user.id,
+              plexUsername: checkData.plex_user.username,
+              plexEmail: checkData.plex_user.email,
+              plexAvatarUrl: checkData.plex_user.thumb,
+              plexToken: checkData.plex_user.authToken || null,
+            });
+            setShowServerSelection(true);
             setPlexConnecting(false);
           }
         } catch (err) {
@@ -163,6 +139,60 @@ export default function Account() {
     } catch (err) {
       setPlexError(err.message);
       setPlexConnecting(false);
+    }
+  };
+
+  // Handle server selection and save to database
+  const handleServerSelected = async (serverInfo) => {
+    try {
+      if (!plexAuthData) {
+        setPlexError('Missing authentication data');
+        return;
+      }
+
+      // Get user's id from the users table
+      const { data: userRecord, error: userError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('auth_id', plexAuthData.userId)
+        .single();
+
+      if (userError) {
+        console.error('Error fetching user record:', userError);
+        setPlexError('Failed to save Plex connection');
+        return;
+      }
+
+      // Call the Worker API to save the complete Plex connection with server info
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8787'}/api/plex/save-server`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: userRecord.id,
+          plex_user_id: plexAuthData.plexUserId,
+          plex_username: plexAuthData.plexUsername,
+          plex_email: plexAuthData.plexEmail,
+          plex_avatar_url: plexAuthData.plexAvatarUrl,
+          plex_token: plexAuthData.plexToken,
+          server_url: serverInfo.serverUrl,
+          server_name: serverInfo.serverName,
+          server_machine_id: serverInfo.serverMachineId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save Plex server');
+      }
+
+      // Clear auth data and refresh
+      setPlexAuthData(null);
+      setShowServerSelection(false);
+      await fetchUserData();
+    } catch (err) {
+      console.error('Error saving server:', err);
+      setPlexError(err.message);
     }
   };
 
@@ -428,7 +458,16 @@ export default function Account() {
                 <div>
                   <div className="font-medium">Plex</div>
                   <div className="text-sm text-slate-400">
-                    {plexConnected ? `Connected as ${plexConnection.plex_username}` : 'Not connected'}
+                    {plexConnected ? (
+                      <>
+                        Connected as {plexConnection.plex_username}
+                        {plexConnection.plex_server_name && (
+                          <div className="text-xs text-slate-500">Server: {plexConnection.plex_server_name}</div>
+                        )}
+                      </>
+                    ) : (
+                      'Not connected'
+                    )}
                   </div>
                 </div>
               </div>
@@ -707,6 +746,17 @@ export default function Account() {
         iptvType={iptvType}
         iptvForm={iptvForm}
         onSave={saveIptvConnection}
+      />
+
+      {/* Plex Server Selection Modal */}
+      <PlexServerSelectionModal
+        isOpen={showServerSelection}
+        onClose={() => {
+          setShowServerSelection(false);
+          setPlexAuthData(null);
+        }}
+        plexAuthToken={plexAuthData?.plexToken}
+        onServerSelected={handleServerSelected}
       />
     </div>
   );

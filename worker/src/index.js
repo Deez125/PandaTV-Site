@@ -481,6 +481,43 @@ function requireAuth(request, env) {
   return token === env.ADMIN_API_KEY;
 }
 
+// Get authenticated user from Supabase session token
+async function getAuthenticatedUser(request, env) {
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+
+  const sessionToken = authHeader.substring(7);
+
+  try {
+    // Verify session with Supabase
+    const sessionResponse = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        'Authorization': `Bearer ${sessionToken}`,
+        'apikey': env.SUPABASE_ANON_KEY
+      }
+    });
+
+    if (!sessionResponse.ok) {
+      return null;
+    }
+
+    const authUser = await sessionResponse.json();
+
+    // Get user profile from public.users table
+    const user = await supabase(env, 'users', {
+      query: `auth_id=eq.${authUser.id}`,
+      single: true
+    });
+
+    return user;
+  } catch (error) {
+    console.error('Auth error:', error);
+    return null;
+  }
+}
+
 // Route handlers
 async function handleStripeWebhook(request, env) {
   const stripe = getStripe(env);
@@ -987,6 +1024,120 @@ async function handlePlexAuthCheck(request) {
       authToken: pin.authToken, // CRITICAL: Include the token so frontend can save it
     },
   });
+}
+
+// Get user's available Plex servers
+async function handleGetPlexServers(request) {
+  const url = new URL(request.url);
+  const authToken = url.searchParams.get('auth_token');
+
+  if (!authToken) {
+    return errorResponse('Missing auth_token', 400);
+  }
+
+  try {
+    // Fetch servers from Plex.tv
+    const response = await fetch('https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1', {
+      headers: {
+        'X-Plex-Token': authToken,
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch Plex servers');
+    }
+
+    const servers = await response.json();
+
+    // Filter for servers with 'server' product type and owned by the user
+    const plexServers = servers
+      .filter(resource => resource.product === 'Plex Media Server' && resource.provides === 'server')
+      .map(server => ({
+        name: server.name,
+        clientIdentifier: server.clientIdentifier,
+        owned: server.owned === true || server.owned === 1,
+        // Get the best connection URL (prefer local, then relay, then remote)
+        connections: server.connections
+          .filter(conn => conn.uri)
+          .map(conn => ({
+            uri: conn.uri,
+            local: conn.local === true || conn.local === 1,
+            relay: conn.relay === true || conn.relay === 1,
+          }))
+          .sort((a, b) => {
+            // Prefer local > non-relay > relay
+            if (a.local && !b.local) return -1;
+            if (!a.local && b.local) return 1;
+            if (!a.relay && b.relay) return -1;
+            if (a.relay && !b.relay) return 1;
+            return 0;
+          }),
+      }))
+      .filter(server => server.connections.length > 0);
+
+    return jsonResponse({ servers: plexServers });
+  } catch (error) {
+    console.error('Error fetching Plex servers:', error);
+    return errorResponse('Failed to fetch Plex servers', 500);
+  }
+}
+
+// Save user's selected Plex server
+async function handleSavePlexServer(request, env) {
+  try {
+    const body = await request.json();
+    const { user_id, plex_user_id, plex_username, plex_email, plex_avatar_url, plex_token, server_url, server_name, server_machine_id } = body;
+
+    if (!user_id || !plex_token || !server_url) {
+      return errorResponse('Missing required fields', 400);
+    }
+
+    // Check if plex connection already exists for this user
+    const existing = await supabase(env, 'plex_connections', {
+      query: `user_id=eq.${user_id}`,
+    });
+
+    if (existing && existing.length > 0) {
+      // Update existing connection
+      await supabase(env, 'plex_connections', {
+        method: 'PATCH',
+        query: `user_id=eq.${user_id}`,
+        body: {
+          plex_user_id,
+          plex_username,
+          plex_email,
+          plex_avatar_url,
+          plex_token,
+          plex_server_url: server_url,
+          plex_server_name: server_name,
+          plex_server_machine_id: server_machine_id,
+          updated_at: new Date().toISOString(),
+        },
+      });
+    } else {
+      // Create new connection
+      await supabase(env, 'plex_connections', {
+        method: 'POST',
+        body: {
+          user_id,
+          plex_user_id,
+          plex_username,
+          plex_email,
+          plex_avatar_url,
+          plex_token,
+          plex_server_url: server_url,
+          plex_server_name: server_name,
+          plex_server_machine_id: server_machine_id,
+        },
+      });
+    }
+
+    return jsonResponse({ success: true, message: 'Plex server saved successfully' });
+  } catch (error) {
+    console.error('Error saving Plex server:', error);
+    return errorResponse('Failed to save Plex server', 500);
+  }
 }
 
 // Customer signup - create user and checkout session
@@ -1572,6 +1723,179 @@ async function handleActivateDevice(request, env) {
   }
 }
 
+// === PLEX LIBRARY ENDPOINTS FOR iOS APP ===
+
+async function handleGetPlexFeatured(request, env) {
+  try {
+    const user = await getAuthenticatedUser(request, env);
+    if (!user) {
+      return errorResponse('Unauthorized', 401);
+    }
+
+    // Get user's Plex connection
+    const plexConnection = await supabase(env, 'plex_connections', {
+      query: `user_id=eq.${user.id}`,
+      single: true
+    });
+
+    if (!plexConnection || !plexConnection.plex_token || !plexConnection.plex_server_url) {
+      return errorResponse('No Plex connection found', 404);
+    }
+
+    // Get recently added items (limit 10) to pick a random featured item
+    const response = await fetch(
+      `${plexConnection.plex_server_url}/library/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size=10`,
+      {
+        headers: {
+          'X-Plex-Token': plexConnection.plex_token,
+          'Accept': 'application/json',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch from Plex');
+    }
+
+    const data = await response.json();
+    const items = data.MediaContainer?.Metadata || [];
+
+    if (items.length === 0) {
+      return jsonResponse({ featured: null });
+    }
+
+    // Pick a random item
+    const featuredItem = items[Math.floor(Math.random() * items.length)];
+
+    // Format the response
+    const formatted = {
+      id: featuredItem.ratingKey,
+      title: featuredItem.title,
+      type: featuredItem.type, // movie or show
+      year: featuredItem.year,
+      summary: featuredItem.summary,
+      rating: featuredItem.contentRating,
+      genres: featuredItem.Genre?.map(g => g.tag) || [],
+      thumb: featuredItem.thumb ? `${plexConnection.plex_server_url}${featuredItem.thumb}?X-Plex-Token=${plexConnection.plex_token}` : null,
+      art: featuredItem.art ? `${plexConnection.plex_server_url}${featuredItem.art}?X-Plex-Token=${plexConnection.plex_token}` : null,
+    };
+
+    return jsonResponse({ featured: formatted });
+  } catch (err) {
+    console.error('Error fetching featured:', err);
+    return errorResponse('Failed to fetch featured content', 500);
+  }
+}
+
+async function handleGetPlexRecentlyAdded(request, env) {
+  try {
+    const user = await getAuthenticatedUser(request, env);
+    if (!user) {
+      return errorResponse('Unauthorized', 401);
+    }
+
+    // Get user's Plex connection
+    const plexConnection = await supabase(env, 'plex_connections', {
+      query: `user_id=eq.${user.id}`,
+      single: true
+    });
+
+    if (!plexConnection || !plexConnection.plex_token || !plexConnection.plex_server_url) {
+      return errorResponse('No Plex connection found', 404);
+    }
+
+    const url = new URL(request.url);
+    const limit = parseInt(url.searchParams.get('limit') || '30');
+    const offset = parseInt(url.searchParams.get('offset') || '0');
+
+    const response = await fetch(
+      `${plexConnection.plex_server_url}/library/recentlyAdded?X-Plex-Container-Start=${offset}&X-Plex-Container-Size=${limit}`,
+      {
+        headers: {
+          'X-Plex-Token': plexConnection.plex_token,
+          'Accept': 'application/json',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch from Plex');
+    }
+
+    const data = await response.json();
+    const items = data.MediaContainer?.Metadata || [];
+
+    const formatted = items.map(item => ({
+      id: item.ratingKey,
+      title: item.title,
+      type: item.type,
+      year: item.year,
+      thumb: item.thumb ? `${plexConnection.plex_server_url}${item.thumb}?X-Plex-Token=${plexConnection.plex_token}` : null,
+    }));
+
+    return jsonResponse({
+      items: formatted,
+      total: data.MediaContainer?.totalSize || items.length,
+      offset,
+      limit
+    });
+  } catch (err) {
+    console.error('Error fetching recently added:', err);
+    return errorResponse('Failed to fetch recently added content', 500);
+  }
+}
+
+async function handleGetPlexContinueWatching(request, env) {
+  try {
+    const user = await getAuthenticatedUser(request, env);
+    if (!user) {
+      return errorResponse('Unauthorized', 401);
+    }
+
+    // Get user's Plex connection
+    const plexConnection = await supabase(env, 'plex_connections', {
+      query: `user_id=eq.${user.id}`,
+      single: true
+    });
+
+    if (!plexConnection || !plexConnection.plex_token || !plexConnection.plex_server_url) {
+      return errorResponse('No Plex connection found', 404);
+    }
+
+    const response = await fetch(
+      `${plexConnection.plex_server_url}/library/onDeck`,
+      {
+        headers: {
+          'X-Plex-Token': plexConnection.plex_token,
+          'Accept': 'application/json',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch from Plex');
+    }
+
+    const data = await response.json();
+    const items = data.MediaContainer?.Metadata || [];
+
+    const formatted = items.map(item => ({
+      id: item.ratingKey,
+      title: item.title,
+      type: item.type,
+      year: item.year,
+      viewOffset: item.viewOffset, // Resume position in milliseconds
+      duration: item.duration,
+      thumb: item.thumb ? `${plexConnection.plex_server_url}${item.thumb}?X-Plex-Token=${plexConnection.plex_token}` : null,
+    }));
+
+    return jsonResponse({ items: formatted });
+  } catch (err) {
+    console.error('Error fetching continue watching:', err);
+    return errorResponse('Failed to fetch continue watching', 500);
+  }
+}
+
 // Main router
 export default {
   async fetch(request, env, ctx) {
@@ -1609,6 +1933,12 @@ export default {
       if (path === '/api/plex/auth/check' && method === 'GET') {
         return handlePlexAuthCheck(request);
       }
+      if (path === '/api/plex/servers' && method === 'GET') {
+        return handleGetPlexServers(request);
+      }
+      if (path === '/api/plex/save-server' && method === 'POST') {
+        return handleSavePlexServer(request, env);
+      }
 
       // Device authentication (TV app)
       if (path === '/api/device/code' && method === 'POST') {
@@ -1642,6 +1972,17 @@ export default {
       }
       if (path === '/api/subscription/cancel' && method === 'POST') {
         return handleCancelSubscription(request, env);
+      }
+
+      // === PLEX LIBRARY ROUTES (user auth via Supabase token) ===
+      if (path === '/api/plex/featured' && method === 'GET') {
+        return handleGetPlexFeatured(request, env);
+      }
+      if (path === '/api/plex/recently-added' && method === 'GET') {
+        return handleGetPlexRecentlyAdded(request, env);
+      }
+      if (path === '/api/plex/continue-watching' && method === 'GET') {
+        return handleGetPlexContinueWatching(request, env);
       }
 
       // === ADMIN ROUTES (auth required) ===
