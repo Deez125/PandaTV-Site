@@ -1838,6 +1838,12 @@ async function handleGetPlexFeatured(request, env) {
             logoPath = logoImage.url;
             console.log('Found logo:', logoPath);
           }
+
+          // Also grab genres from the full metadata if we don't have them
+          if (genres.length === 0 && metadata?.Genre) {
+            genres = metadata.Genre.map(g => g.tag);
+            console.log('Fetched genres from metadata:', genres);
+          }
         }
       }
     } catch (err) {
