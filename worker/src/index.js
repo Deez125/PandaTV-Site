@@ -1885,15 +1885,20 @@ async function handleGetPlexContinueWatching(request, env) {
     const data = await response.json();
     const items = data.MediaContainer?.Metadata || [];
 
-    const formatted = items.map(item => ({
-      id: item.ratingKey,
-      title: item.title,
-      type: item.type,
-      year: item.year,
-      viewOffset: item.viewOffset, // Resume position in milliseconds
-      duration: item.duration,
-      thumb: item.thumb ? `${plexConnection.plex_server_url}${item.thumb}?X-Plex-Token=${plexConnection.plex_token}` : null,
-    }));
+    const formatted = items.map(item => {
+      // For TV episodes, use the show's poster (grandparentThumb) instead of episode thumbnail
+      const thumbPath = item.type === 'episode' && item.grandparentThumb ? item.grandparentThumb : item.thumb;
+
+      return {
+        id: item.ratingKey,
+        title: item.type === 'episode' ? item.grandparentTitle : item.title, // Use show title for episodes
+        type: item.type,
+        year: item.year,
+        viewOffset: item.viewOffset, // Resume position in milliseconds
+        duration: item.duration,
+        thumb: thumbPath ? `${plexConnection.plex_server_url}${thumbPath}?X-Plex-Token=${plexConnection.plex_token}` : null,
+      };
+    });
 
     return jsonResponse({ items: formatted });
   } catch (err) {
