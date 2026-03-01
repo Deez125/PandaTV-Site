@@ -107,6 +107,9 @@ export default function Account() {
             clearInterval(interval);
             setPollInterval(null);
 
+            console.log('Plex authorized, showing server selection modal');
+            console.log('Plex user data:', checkData.plex_user);
+
             // Store Plex auth data and show server selection modal
             setPlexAuthData({
               userId: user.id,
@@ -118,6 +121,7 @@ export default function Account() {
             });
             setShowServerSelection(true);
             setPlexConnecting(false);
+            console.log('State updated - showServerSelection should be true');
           }
         } catch (err) {
           console.error('Poll error:', err);

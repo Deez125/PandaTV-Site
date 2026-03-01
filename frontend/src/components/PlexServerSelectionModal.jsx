@@ -8,7 +8,9 @@ export default function PlexServerSelectionModal({ isOpen, onClose, plexAuthToke
   const [selectedConnection, setSelectedConnection] = useState(null);
 
   useEffect(() => {
+    console.log('PlexServerSelectionModal - isOpen:', isOpen, 'plexAuthToken:', plexAuthToken);
     if (isOpen && plexAuthToken) {
+      console.log('Fetching Plex servers...');
       fetchServers();
     }
   }, [isOpen, plexAuthToken]);
