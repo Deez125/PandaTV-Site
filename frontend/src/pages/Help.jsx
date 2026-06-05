@@ -23,13 +23,13 @@ const TOPICS = [
     icon: LuLibraryBig,
     title: 'Connect your media',
     body: 'Link Plex, Jellyfin, or Emby so your whole library shows up in the app.',
-    action: { label: 'Open Connected Services', to: '/settings' },
+    action: { label: 'Open Connected Services', to: '/settings?tab=services' },
   },
   {
     icon: LuTv,
     title: 'Set up live TV (IPTV)',
     body: 'Add an M3U playlist or Xtream Codes login to watch live channels.',
-    action: { label: 'Add IPTV provider', to: '/settings' },
+    action: { label: 'Add IPTV provider', to: '/settings?tab=services' },
   },
   {
     icon: LuLink,
@@ -41,7 +41,7 @@ const TOPICS = [
     icon: LuCreditCard,
     title: 'Billing & subscription',
     body: 'View your plan, switch between monthly and yearly, or cancel anytime.',
-    action: { label: 'Manage subscription', to: '/settings' },
+    action: { label: 'Manage subscription', to: '/settings?tab=subscription' },
   },
 ];
 

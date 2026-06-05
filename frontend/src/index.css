@@ -141,6 +141,41 @@ html { scroll-behavior: smooth; }
   border-color: rgba(255, 255, 255, 0.18);
 }
 
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.4rem;
+  background: #a32a2a;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.95rem;
+  border-radius: 999px;
+  transition: transform 0.15s ease, background 0.15s ease;
+  letter-spacing: -0.01em;
+}
+.btn-danger:hover {
+  background: #8f2424;
+  transform: translateY(-1px);
+}
+
+/* Opt out of the hover lift (color change only) */
+.btn-primary.no-lift:hover,
+.btn-secondary.no-lift:hover,
+.btn-danger.no-lift:hover {
+  transform: none;
+}
+
+/* Toasts */
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.toast-in {
+  animation: toastIn 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+
 .btn-ghost {
   display: inline-flex;
   align-items: center;

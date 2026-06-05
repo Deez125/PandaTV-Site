@@ -13,6 +13,7 @@ import NotFound from './pages/NotFound';
 import CompleteProfileModal from './components/CompleteProfileModal';
 import DebugPanel from './components/DebugPanel';
 import { DebugProvider } from './lib/debug';
+import { ToastProvider } from './lib/toast';
 
 // Simple hash-based router
 function useRoute() {
@@ -127,7 +128,9 @@ export default function App() {
   return (
     <AuthProvider>
       <DebugProvider>
-        <Router />
+        <ToastProvider>
+          <Router />
+        </ToastProvider>
       </DebugProvider>
     </AuthProvider>
   );

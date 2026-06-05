@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useAuth, startPlexAuth, checkPlexAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { useDebug, resolveSubscription } from '../lib/debug';
+import { useRequireAuth } from '../lib/useRequireAuth';
+import { useToast } from '../lib/toast';
 import IptvTestModal from '../components/IptvTestModal';
 import PlexServerSelectionModal from '../components/PlexServerSelectionModal';
 import ConfirmModal from '../components/ConfirmModal';
@@ -126,9 +128,9 @@ const SUB_STATUS = {
 
 function SubscriptionPanel({ userData, loading, navigate, onRefresh }) {
   const { subOverride } = useDebug();
+  const toast = useToast();
   const [modal, setModal] = useState(null);      // null | 'cancel' | 'switch'
   const [busy, setBusy] = useState(false);
-  const [actionError, setActionError] = useState(null);
   const [preview, setPreview] = useState(null);  // { amount_due, currency }
   const [resuming, setResuming] = useState(false);
 
@@ -175,14 +177,13 @@ function SubscriptionPanel({ userData, loading, navigate, onRefresh }) {
 
   // --- actions ---
   const openSwitch = async () => {
-    setActionError(null);
     setBusy(true);
     try {
       const p = await previewSwitchPlan(switchTo);
       setPreview(p);
       setModal('switch');
     } catch (e) {
-      window.alert(e.message || 'Could not load switch details.');
+      toast.error(e.message || 'Could not load switch details.');
     } finally {
       setBusy(false);
     }
@@ -190,14 +191,16 @@ function SubscriptionPanel({ userData, loading, navigate, onRefresh }) {
 
   const confirmSwitch = async () => {
     setBusy(true);
-    setActionError(null);
     try {
       await switchPlan(switchTo);
       setModal(null);
       setPreview(null);
       refresh();
+      toast.success(`Switched to ${INTERVAL_LABEL[switchTo]} billing.`);
     } catch (e) {
-      setActionError(e.message || 'Switch failed.');
+      setModal(null);
+      setPreview(null);
+      toast.error(e.message || 'Could not switch plan.');
     } finally {
       setBusy(false);
     }
@@ -205,13 +208,14 @@ function SubscriptionPanel({ userData, loading, navigate, onRefresh }) {
 
   const confirmCancel = async () => {
     setBusy(true);
-    setActionError(null);
     try {
       await cancelSubscription();
       setModal(null);
       refresh();
+      toast.success(`Subscription cancelled — access continues until ${periodEnd || 'the end of your billing period'}.`);
     } catch (e) {
-      setActionError(e.message || 'Cancel failed.');
+      setModal(null);
+      toast.error(e.message || 'Could not cancel subscription.');
     } finally {
       setBusy(false);
     }
@@ -222,8 +226,9 @@ function SubscriptionPanel({ userData, loading, navigate, onRefresh }) {
     try {
       await resumeSubscription();
       refresh();
+      toast.success('Subscription resumed.');
     } catch (e) {
-      window.alert(e.message || 'Could not resume.');
+      toast.error(e.message || 'Could not resume subscription.');
     } finally {
       setResuming(false);
     }
@@ -279,15 +284,15 @@ function SubscriptionPanel({ userData, loading, navigate, onRefresh }) {
           ) : (
             <>
               <button
-                onClick={() => { setActionError(null); setModal('cancel'); }}
+                onClick={() => setModal('cancel')}
                 className="font-semibold rounded-full transition-colors"
-                style={{ ...btnSize, background: 'var(--danger)', color: '#fff' }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = '#d65555')}
-                onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--danger)')}
+                style={{ ...btnSize, background: '#a32a2a', color: '#fff' }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#8f2424')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = '#a32a2a')}
               >
                 Cancel
               </button>
-              <button onClick={openSwitch} disabled={busy} className="btn-primary" style={btnSize}>
+              <button onClick={openSwitch} disabled={busy} className="btn-primary no-lift" style={btnSize}>
                 {busy && !modal ? 'Loading…' : `Switch to ${INTERVAL_LABEL[switchTo]}`}
               </button>
             </>
@@ -299,14 +304,13 @@ function SubscriptionPanel({ userData, loading, navigate, onRefresh }) {
         open={modal === 'cancel'}
         title="Cancel subscription?"
         message={
-          <>You'll keep access until <strong style={{ color: 'var(--fg)' }}>{periodEnd}</strong>.
+          <>You'll keep access until <strong style={{ color: 'var(--fg)' }}>{periodEnd || 'the end of your current billing period'}</strong>.
           After that your subscription ends and you won't be charged again.</>
         }
         confirmLabel="Cancel subscription"
         cancelLabel="Keep subscription"
         confirmTone="danger"
         loading={busy}
-        error={actionError}
         onConfirm={confirmCancel}
         onClose={() => setModal(null)}
       />
@@ -317,7 +321,6 @@ function SubscriptionPanel({ userData, loading, navigate, onRefresh }) {
         message={switchMsg}
         confirmLabel="Confirm switch"
         loading={busy}
-        error={actionError}
         onConfirm={confirmSwitch}
         onClose={() => { setModal(null); setPreview(null); }}
       />
@@ -327,6 +330,7 @@ function SubscriptionPanel({ userData, loading, navigate, onRefresh }) {
 
 export default function Account() {
   const { user, signOut } = useAuth();
+  useRequireAuth(); // bounce to / when signed out
   const [userData, setUserData] = useState(null);
   const [plexConnection, setPlexConnection] = useState(null);
   const [iptvConnection, setIptvConnection] = useState(null);
@@ -334,7 +338,11 @@ export default function Account() {
   const [embyConnection, setEmbyConnection] = useState(null);
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
-  const [tab, setTab] = useState('account'); // 'account' | 'subscription' | 'services'
+  // Initial tab can be deep-linked via ?tab= (e.g. from the Help page).
+  const [tab, setTab] = useState(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    return ['account', 'subscription', 'services'].includes(t) ? t : 'account';
+  }); // 'account' | 'subscription' | 'services'
 
   // Plex
   const [plexConnecting, setPlexConnecting] = useState(false);

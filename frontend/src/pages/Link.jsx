@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../lib/auth';
+import { useRequireAuth } from '../lib/useRequireAuth';
 import { IoTvOutline } from 'react-icons/io5';
 import DeviceCodeInput from '../components/DeviceCodeInput';
 
@@ -13,6 +14,7 @@ const Wordmark = ({ size = '1.5rem' }) => (
 
 export default function Link() {
   const { user, session, loading: authLoading } = useAuth();
+  useRequireAuth(); // bounce to / when signed out
   const [code, setCode] = useState('');
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');

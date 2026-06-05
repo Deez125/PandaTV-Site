@@ -4,6 +4,8 @@ import { LuArrowLeft, LuCheck, LuShieldCheck, LuLock } from 'react-icons/lu';
 import { stripePromise } from '../lib/stripe';
 import { createSubscription } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { supabase } from '../lib/supabase';
+import { navigateTo } from '../lib/useRequireAuth';
 
 /*
  * /pay — custom checkout backed by a real Stripe Payment Element.
@@ -271,10 +273,33 @@ export default function Pay() {
   const [interval, setInterval] = useState('month');
   const [clientSecret, setClientSecret] = useState(null);
   const [initError, setInitError] = useState(null);
+  const [allowed, setAllowed] = useState(null); // null = checking access
 
-  // Create (or recreate, on plan switch) the subscription to get a client secret.
+  // Access guard: must be signed in AND not already subscribed; else redirect home.
   useEffect(() => {
-    if (authLoading || !user) return;
+    if (authLoading) return;
+    if (!user) { navigateTo('/'); return; }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('users')
+        .select('subscription_status')
+        .eq('auth_id', user.id)
+        .single();
+      if (cancelled) return;
+      const s = data?.subscription_status;
+      if (s === 'active' || s === 'past_due') {
+        navigateTo('/'); // already subscribed
+        return;
+      }
+      setAllowed(true);
+    })();
+    return () => { cancelled = true; };
+  }, [user, authLoading]);
+
+  // Create (or recreate, on plan switch) the subscription once access is granted.
+  useEffect(() => {
+    if (!allowed) return;
     let cancelled = false;
     setClientSecret(null);
     setInitError(null);
@@ -282,19 +307,15 @@ export default function Pay() {
       .then((data) => { if (!cancelled) setClientSecret(data.clientSecret); })
       .catch((err) => { if (!cancelled) setInitError(err.message); });
     return () => { cancelled = true; };
-  }, [user, authLoading, interval]);
+  }, [allowed, interval]);
+
+  // Don't render checkout until access is confirmed (no flash for signed-out
+  // or already-subscribed users while the redirect happens).
+  if (allowed !== true) return null;
 
   let paymentArea;
   if (!stripePromise) {
     paymentArea = <Notice>Checkout isn't configured yet (missing publishable key).</Notice>;
-  } else if (authLoading) {
-    paymentArea = <Notice>Loading…</Notice>;
-  } else if (!user) {
-    paymentArea = (
-      <Notice>
-        Please <a href="/login" className="underline" style={{ color: 'var(--accent)' }}>sign in</a> to subscribe.
-      </Notice>
-    );
   } else if (initError) {
     paymentArea = <Notice tone="danger">{initError}</Notice>;
   } else if (!clientSecret) {
