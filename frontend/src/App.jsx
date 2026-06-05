@@ -7,8 +7,11 @@ import Auth from './pages/Auth';
 import Success from './pages/Success';
 import Account from './pages/Account';
 import Link from './pages/Link';
+import Pay from './pages/Pay';
 import NotFound from './pages/NotFound';
 import CompleteProfileModal from './components/CompleteProfileModal';
+import DebugPanel from './components/DebugPanel';
+import { DebugProvider } from './lib/debug';
 
 // Simple hash-based router
 function useRoute() {
@@ -88,10 +91,12 @@ function Router() {
     content = <Auth key="auth" initialMode={route === '/signup' ? 'signup' : 'login'} />;
   } else if (route === '/success') {
     content = <Success />;
-  } else if (route === '/account') {
+  } else if (route === '/settings') {
     content = <Account />;
   } else if (route === '/link') {
     content = <Link />;
+  } else if (route === '/pay') {
+    content = <Pay />;
   } else if (route === '/admin') {
     content = <AdminLayout />;
   } else {
@@ -110,6 +115,7 @@ function Router() {
           onComplete={handleProfileComplete}
         />
       )}
+      <DebugPanel />
     </>
   );
 }
@@ -117,7 +123,9 @@ function Router() {
 export default function App() {
   return (
     <AuthProvider>
-      <Router />
+      <DebugProvider>
+        <Router />
+      </DebugProvider>
     </AuthProvider>
   );
 }

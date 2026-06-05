@@ -1,3 +1,5 @@
+import { supabase } from './supabase';
+
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8787';
 const API_KEY = import.meta.env.VITE_API_KEY || '';
 
@@ -20,6 +22,31 @@ async function fetchApi(endpoint, options = {}) {
     throw new Error(error.error || 'Request failed');
   }
 
+  return response.json();
+}
+
+// --- Customer self-serve (Supabase JWT auth, not the admin key) ---
+
+// Create a Stripe subscription for the logged-in user and get the
+// PaymentIntent client_secret to confirm with the Payment Element.
+export async function createSubscription(interval = 'month') {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) throw new Error('You must be signed in to subscribe.');
+
+  const response = await fetch(`${API_BASE}/api/subscription/create`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({ interval }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Request failed' }));
+    throw new Error(error.error || 'Could not start checkout');
+  }
   return response.json();
 }
 

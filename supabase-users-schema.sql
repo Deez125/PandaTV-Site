@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS public.users (
   first_name TEXT,
   last_name TEXT,
   avatar_url TEXT,
-  subscription_tier TEXT NOT NULL DEFAULT 'free' CHECK (subscription_tier IN ('free', 'basic')),
+  subscription_tier TEXT NOT NULL DEFAULT 'free' CHECK (subscription_tier IN ('free', 'access')),
   -- Plex connection fields
   plex_user_id TEXT,
   plex_username TEXT,

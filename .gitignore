@@ -11,6 +11,11 @@ dist/
 .env.*.local
 .dev.vars
 
+# Bulk secrets for `wrangler secret bulk` — never commit
+secrets.json
+prod-secrets.json
+*-secrets.json
+
 # IDE
 .vscode/
 .idea/

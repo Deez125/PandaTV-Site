@@ -1,13 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../lib/auth';
-import { FaGear, FaLink } from 'react-icons/fa6';
-import { IoMdHelpCircleOutline } from 'react-icons/io';
 import { IoTvOutline, IoPhonePortraitOutline, IoFlashOutline } from 'react-icons/io5';
 import { BsGlobe } from 'react-icons/bs';
 import { FaApple, FaGoogle, FaAmazon } from 'react-icons/fa';
 import { SiRoku } from 'react-icons/si';
 import { MdDevices } from 'react-icons/md';
-import { LuLibraryBig } from 'react-icons/lu';
+import { LuLibraryBig, LuSettings, LuLink, LuCircleHelp, LuLogOut } from 'react-icons/lu';
+import AnimatedPrice from '../components/AnimatedPrice';
 
 const Wordmark = ({ className = '' }) => (
   <span className={`wordmark ${className}`}>
@@ -56,7 +55,7 @@ const faqItems = [
   },
   {
     question: "Is there a free trial?",
-    answer: "We offer a 14-day free trial for new subscribers. Experience all NovixTV features before committing. Cancel anytime during the trial and you won't be charged."
+    answer: "We offer a 7-day free trial for new subscribers. Experience all NovixTV features before committing. Cancel anytime during the trial and you won't be charged."
   }
 ];
 
@@ -93,9 +92,19 @@ const features = [
   },
 ];
 
-const plans = [
-  { id: 'monthly', name: 'Monthly', price: 9.99, period: 'month', popular: false },
-  { id: 'yearly',  name: 'Yearly',  price: 79.99, period: 'year',  popular: true, savings: 'Save 33%' },
+const PRICING = {
+  monthly: { price: 3.99, period: 'month' },
+  yearly:  { price: 34.99, period: 'year' },
+};
+const PRICING_SAVE = Math.round((1 - PRICING.yearly.price / (PRICING.monthly.price * 12)) * 100);
+// Price toggle animation: 'odometer' (per-digit roll, primary) or 'slide' (whole-price scroll, secondary)
+const PRICE_VARIANT = 'slide';
+const PLAN_FEATURES = [
+  'All platform access',
+  'Plex, Jellyfin & Emby support',
+  'IPTV integration',
+  '4K streaming support',
+  '7-day free trial',
 ];
 
 function FAQItem({ question, answer, isOpen, onClick }) {
@@ -119,6 +128,7 @@ export default function Home() {
   const { user, signOut } = useAuth();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [openFaqIndex, setOpenFaqIndex] = useState(null);
+  const [billing, setBilling] = useState('yearly');
   const profileMenuRef = useRef(null);
 
   useEffect(() => {
@@ -141,9 +151,8 @@ export default function Home() {
     await signOut();
   };
 
-  const handleSelectPlan = (plan) => {
-    if (user) navigate(`/checkout?plan=${plan.id}`);
-    else navigate(`/signup?plan=${plan.id}`);
+  const handleSelectPlan = () => {
+    navigate(user ? '/pay' : '/signup');
   };
 
   return (
@@ -187,7 +196,7 @@ export default function Home() {
                 className="menu absolute right-0 mt-3 w-60 rounded-xl overflow-hidden"
                 style={{ zIndex: 100 }}
               >
-                <div className="px-4 py-3.5">
+                <div className="px-4 py-3">
                   <div className="font-medium text-sm truncate" style={{ color: 'var(--fg)' }}>
                     {user.user_metadata?.full_name || user.user_metadata?.name || 'User'}
                   </div>
@@ -196,23 +205,21 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="menu-divider" />
-                <div className="py-1.5">
-                  <button onClick={() => { setShowProfileMenu(false); navigate('/account'); }} className="menu-item">
-                    <FaGear className="menu-icon" /> Account settings
+                <div className="py-1">
+                  <button onClick={() => { setShowProfileMenu(false); navigate('/settings'); }} className="menu-item">
+                    <LuSettings className="menu-icon" /> Settings
                   </button>
                   <button onClick={() => { setShowProfileMenu(false); navigate('/link'); }} className="menu-item">
-                    <FaLink className="menu-icon" /> Link device
+                    <LuLink className="menu-icon" /> Link device
                   </button>
                   <button className="menu-item">
-                    <IoMdHelpCircleOutline className="menu-icon" /> Help
+                    <LuCircleHelp className="menu-icon" /> Help
                   </button>
                 </div>
                 <div className="menu-divider" />
-                <div className="py-1.5">
+                <div className="py-1">
                   <button onClick={handleLogout} className="menu-item menu-item--danger">
-                    <svg className="menu-icon" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                    </svg>
+                    <LuLogOut className="menu-icon" />
                     Sign out
                   </button>
                 </div>
@@ -233,7 +240,7 @@ export default function Home() {
       <section className="relative pt-24 pb-32 px-6">
         <div className="relative max-w-4xl mx-auto text-center">
           <div className="eyebrow mb-6">Now in beta</div>
-          <h1 className="text-5xl md:text-7xl font-bold leading-[1.05] tracking-tight mb-7"
+          <h1 className="text-5xl md:text-7xl font-bold leading-[1.05] tracking-tight mb-7 cursor-default"
               style={{ letterSpacing: '-0.035em' }}>
             All your streaming.
             <br />
@@ -250,7 +257,7 @@ export default function Home() {
             </button>
             <button className="btn-secondary">Watch demo</button>
           </div>
-          <p className="mt-6 text-xs text-dim">14-day free trial · No credit card required</p>
+          <p className="mt-6 text-xs text-dim">7-day free trial · No credit card required</p>
         </div>
       </section>
 
@@ -262,7 +269,7 @@ export default function Home() {
           </p>
           <div className="flex items-center justify-center gap-x-12 gap-y-8 flex-wrap">
             {platforms.map(({ icon: Icon, label }) => (
-              <div key={label} className="flex items-center gap-2.5 text-muted hover:text-white transition-colors">
+              <div key={label} className="flex items-center gap-2.5 text-muted hover:text-white transition-colors cursor-default">
                 <Icon className="w-5 h-5" />
                 <span className="text-sm font-medium">{label}</span>
               </div>
@@ -310,7 +317,7 @@ export default function Home() {
           </div>
           <div className="grid md:grid-cols-3 gap-12 md:gap-16">
             {[
-              { n: '01', t: 'Create account',    b: 'Sign up with email or your favorite social account. Start your 14-day free trial instantly.' },
+              { n: '01', t: 'Create account',    b: 'Sign up with email or your favorite social account. Start your 7-day free trial instantly.' },
               { n: '02', t: 'Connect services',  b: 'Link your Plex, Jellyfin, Emby, or IPTV provider credentials.' },
               { n: '03', t: 'Start watching',    b: 'Download the app on your devices and enjoy all your content in one place.' },
             ].map(({ n, t, b }) => (
@@ -333,63 +340,58 @@ export default function Home() {
                 style={{ letterSpacing: '-0.03em' }}>
               Simple, honest pricing.
             </h2>
-            <p className="text-lg text-muted">14-day free trial. Cancel anytime.</p>
+            <p className="text-lg text-muted">7-day free trial. Cancel anytime.</p>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto">
-            {plans.map((plan) => (
-              <div
-                key={plan.id}
-                className="relative rounded-2xl p-8"
-                style={{
-                  background: 'var(--bg-elev)',
-                  outline: plan.popular
-                    ? '1px solid var(--accent)'
-                    : '1px solid var(--hairline)',
-                }}
+          {/* Billing toggle */}
+          <div className="flex justify-center mb-10">
+            <div className="inline-flex p-1 rounded-full"
+                 style={{ background: 'var(--bg-elev)', border: '1px solid var(--hairline)' }}>
+              <button
+                onClick={() => setBilling('monthly')}
+                className="px-5 py-2 rounded-full text-sm font-medium transition-colors cursor-default"
+                style={billing === 'monthly'
+                  ? { background: 'var(--fg)', color: 'var(--bg)' }
+                  : { color: 'var(--fg-muted)' }}
               >
-                {plan.popular && (
-                  <div className="absolute -top-3 left-8">
-                    <span className="text-[10px] uppercase tracking-[0.18em] font-semibold px-2.5 py-1 rounded-full"
-                          style={{ background: 'var(--accent)', color: 'var(--bg)' }}>
-                      Best value
-                    </span>
-                  </div>
-                )}
-                <div className="mb-8">
-                  <h3 className="text-sm font-medium text-muted uppercase tracking-wider mb-3">{plan.name}</h3>
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="text-5xl font-bold tracking-tight">${plan.price}</span>
-                    <span className="text-muted text-sm">/ {plan.period}</span>
-                  </div>
-                  {plan.savings && (
-                    <span className="inline-block mt-2 text-xs font-medium" style={{ color: 'var(--accent-bright)' }}>
-                      {plan.savings}
-                    </span>
-                  )}
+                Monthly
+              </button>
+              <button
+                onClick={() => setBilling('yearly')}
+                className="px-5 py-2 rounded-full text-sm font-medium transition-colors cursor-default"
+                style={billing === 'yearly'
+                  ? { background: 'var(--fg)', color: 'var(--bg)' }
+                  : { color: 'var(--fg-muted)' }}
+              >
+                Yearly
+              </button>
+            </div>
+          </div>
+
+          {/* Single plan card */}
+          <div className="relative rounded-2xl p-8 max-w-md mx-auto"
+               style={{ background: 'var(--bg-elev)', outline: '1px solid var(--accent)' }}>
+            <div className="mb-8">
+              <AnimatedPrice pricing={PRICING} billing={billing} variant={PRICE_VARIANT} />
+              <div className="savings-reveal" data-show={billing === 'yearly'}>
+                <div>
+                  <span className="inline-block mt-2 text-xs font-medium" style={{ color: '#34d399' }}>
+                    Save {PRICING_SAVE}% vs paying monthly
+                  </span>
                 </div>
-                <ul className="space-y-3.5 mb-8 text-sm">
-                  {[
-                    'All platform access',
-                    'Plex, Jellyfin & Emby support',
-                    'IPTV integration',
-                    '4K streaming support',
-                    '14-day free trial',
-                  ].map((item) => (
-                    <li key={item} className="flex items-center gap-3">
-                      <span style={{ color: 'var(--accent-bright)' }}><CheckIcon /></span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-                <button
-                  onClick={() => handleSelectPlan(plan)}
-                  className={plan.popular ? 'btn-primary w-full' : 'btn-secondary w-full'}
-                >
-                  Start free trial
-                </button>
               </div>
-            ))}
+            </div>
+            <ul className="space-y-3.5 mb-8 text-sm">
+              {PLAN_FEATURES.map((item) => (
+                <li key={item} className="flex items-center gap-3">
+                  <span style={{ color: 'var(--accent-bright)' }}><CheckIcon /></span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+            <button onClick={handleSelectPlan} className="btn-primary w-full">
+              Start free trial
+            </button>
           </div>
         </div>
       </section>

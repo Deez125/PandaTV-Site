@@ -492,6 +492,7 @@ async function getAuthenticatedUser(request, env) {
 
   try {
     // Verify session with Supabase
+    console.log('[auth] SUPABASE_URL =', env.SUPABASE_URL, '| anon key set:', !!env.SUPABASE_ANON_KEY, '| token len:', sessionToken?.length);
     const sessionResponse = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
       headers: {
         'Authorization': `Bearer ${sessionToken}`,
@@ -500,6 +501,7 @@ async function getAuthenticatedUser(request, env) {
     });
 
     if (!sessionResponse.ok) {
+      console.error('[auth] Supabase /user returned', sessionResponse.status, await sessionResponse.text().catch(() => ''));
       return null;
     }
 
@@ -540,139 +542,77 @@ async function handleStripeWebhook(request, env) {
 
   console.log('Received Stripe event:', event.type);
 
+  // Patch the users row that owns this Stripe customer.
+  // tier: 'access' = paying, 'free' = not. status mirrors Stripe.
+  async function syncByCustomer(customerId, fields) {
+    const user = await supabase(env, 'users', {
+      query: `stripe_customer_id=eq.${customerId}`,
+      single: true,
+    }).catch(() => null);
+    if (!user) {
+      console.warn('Webhook: no user for customer', customerId);
+      return;
+    }
+    await supabase(env, 'users', {
+      method: 'PATCH',
+      query: `id=eq.${user.id}`,
+      body: fields,
+    });
+  }
+
   try {
     switch (event.type) {
-      case 'checkout.session.completed': {
-        const session = event.data.object;
-        const userId = session.metadata?.user_id;
-        if (!userId) {
-          console.error('No user_id in checkout session metadata');
-          break;
-        }
-
-        // Check if this is an upgrade (old subscription needs to be cancelled)
-        const oldSubscriptionId = session.metadata?.old_subscription_id;
-        if (oldSubscriptionId) {
-          try {
-            // Cancel the old subscription immediately
-            await stripe.subscriptions.cancel(oldSubscriptionId);
-            await logActivity(env, userId, 'subscription_upgraded', `Upgraded from ${session.metadata.upgrade_from} to 4k plan`);
-          } catch (err) {
-            console.error('Failed to cancel old subscription:', err.message);
-          }
-        } else {
-          await logActivity(env, userId, 'subscription_started', 'Subscription activated via checkout');
-        }
-
-        // Determine tier from price
-        const newSubscriptionId = session.subscription;
-        let tier = 'hd';
-        if (newSubscriptionId) {
-          const subscription = await stripe.subscriptions.retrieve(newSubscriptionId);
-          const priceId = subscription.items.data[0]?.price?.id;
-          if (priceId === env.STRIPE_PRICE_4K) {
-            tier = '4k';
-          }
-        }
-
-        await supabase(env, 'users', {
-          method: 'PATCH',
-          query: `id=eq.${userId}`,
-          body: {
-            stripe_customer_id: session.customer,
-            subscription_status: 'active',
-            tier: tier,
-          },
-        });
-
-        break;
-      }
-
+      // Subscription lifecycle — the source of truth for status.
       case 'customer.subscription.created':
       case 'customer.subscription.updated': {
-        const subscription = event.data.object;
-        const customerId = subscription.customer;
+        const sub = event.data.object;
+        const active = sub.status === 'active' || sub.status === 'trialing';
+        let status = 'active';
+        if (sub.status === 'past_due') status = 'past_due';
+        else if (sub.status === 'canceled' || sub.status === 'unpaid' || sub.status === 'incomplete_expired') status = 'cancelled';
+        else if (!active) status = 'none'; // incomplete (awaiting first payment)
 
-        const users = await supabase(env, 'users', {
-          query: `stripe_customer_id=eq.${customerId}`,
+        // 'month' | 'year' from the subscription's price.
+        const interval = sub.items?.data?.[0]?.price?.recurring?.interval || null;
+
+        await syncByCustomer(sub.customer, {
+          stripe_subscription_id: sub.id,
+          subscription_status: status,
+          subscription_tier: active ? 'access' : 'free',
+          subscription_interval: active ? interval : null,
+          current_period_end: sub.current_period_end
+            ? new Date(sub.current_period_end * 1000).toISOString()
+            : null,
         });
-
-        if (users && users.length > 0) {
-          const user = users[0];
-          let status = subscription.status;
-          if (status === 'active' || status === 'trialing') {
-            status = 'active';
-          } else if (status === 'past_due') {
-            status = 'past_due';
-          } else if (status === 'canceled' || status === 'unpaid') {
-            status = 'cancelled';
-          }
-
-          await supabase(env, 'users', {
-            method: 'PATCH',
-            query: `id=eq.${user.id}`,
-            body: {
-              stripe_subscription_id: subscription.id,
-              subscription_status: status,
-              current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-            },
-          });
-        }
         break;
       }
 
       case 'customer.subscription.deleted': {
-        const subscription = event.data.object;
-        const customerId = subscription.customer;
-
-        const users = await supabase(env, 'users', {
-          query: `stripe_customer_id=eq.${customerId}`,
+        const sub = event.data.object;
+        await syncByCustomer(sub.customer, {
+          subscription_status: 'cancelled',
+          subscription_tier: 'free',
+          subscription_interval: null,
         });
+        break;
+      }
 
-        if (users && users.length > 0) {
-          const user = users[0];
-
-          await supabase(env, 'users', {
-            method: 'PATCH',
-            query: `id=eq.${user.id}`,
-            body: { subscription_status: 'cancelled' },
-          });
-
-          // Remove from Plex
-          if (user.plex_user_id) {
-            try {
-              await removePlexFriend(env, user.plex_user_id);
-              await logActivity(env, user.id, 'plex_removed', 'Removed from Plex - subscription cancelled');
-            } catch (err) {
-              console.error('Failed to remove from Plex:', err.message);
-              await logActivity(env, user.id, 'plex_removal_failed', `Failed to remove from Plex: ${err.message}`);
-            }
-          } else {
-            await logActivity(env, user.id, 'subscription_cancelled', 'Subscription cancelled (no Plex ID to remove)');
-          }
-        }
+      // First (and renewal) payments succeeded — confirm access.
+      case 'invoice.paid':
+      case 'invoice.payment_succeeded': {
+        const invoice = event.data.object;
+        await syncByCustomer(invoice.customer, {
+          subscription_status: 'active',
+          subscription_tier: 'access',
+        });
         break;
       }
 
       case 'invoice.payment_failed': {
         const invoice = event.data.object;
-        const customerId = invoice.customer;
-
-        const users = await supabase(env, 'users', {
-          query: `stripe_customer_id=eq.${customerId}`,
+        await syncByCustomer(invoice.customer, {
+          subscription_status: 'past_due',
         });
-
-        if (users && users.length > 0) {
-          const user = users[0];
-
-          await supabase(env, 'users', {
-            method: 'PATCH',
-            query: `id=eq.${user.id}`,
-            body: { subscription_status: 'past_due' },
-          });
-
-          await logActivity(env, user.id, 'payment_failed', `Payment failed for invoice ${invoice.id}`);
-        }
         break;
       }
     }
@@ -682,6 +622,87 @@ async function handleStripeWebhook(request, env) {
   }
 
   return jsonResponse({ received: true });
+}
+
+// Customer self-serve subscription (Model A — Supabase JWT auth).
+// Creates a Stripe subscription in `default_incomplete` state and returns the
+// first invoice's PaymentIntent client_secret so the frontend Payment Element
+// can confirm it. The webhook flips subscription_status to 'active' on success.
+async function handleCreateSubscription(request, env) {
+  const user = await getAuthenticatedUser(request, env);
+  if (!user) return errorResponse('Unauthorized', 401);
+
+  const stripe = getStripe(env);
+
+  // Which billing interval did they pick? (defaults to monthly)
+  let interval = 'month';
+  try {
+    const body = await request.json();
+    if (body?.interval === 'year') interval = 'year';
+  } catch (_) { /* no/invalid body → monthly */ }
+  const priceId = interval === 'year'
+    ? (env.STRIPE_PRICE_YEARLY || env.STRIPE_DEFAULT_PRICE_ID)
+    : (env.STRIPE_PRICE_MONTHLY || env.STRIPE_DEFAULT_PRICE_ID);
+
+  try {
+    // Reuse an existing active subscription if the user already has one.
+    if (user.stripe_subscription_id && user.subscription_status === 'active') {
+      return errorResponse('You already have an active subscription', 409);
+    }
+
+    // Get or create the Stripe customer for this user.
+    let customerId = user.stripe_customer_id;
+    if (!customerId) {
+      const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ');
+      const customer = await stripe.customers.create({
+        email: user.email,
+        name: fullName || undefined,
+        metadata: { user_id: user.id, auth_id: user.auth_id },
+      });
+      customerId = customer.id;
+      await supabase(env, 'users', {
+        method: 'PATCH',
+        query: `id=eq.${user.id}`,
+        body: { stripe_customer_id: customerId },
+      });
+    }
+
+    // Cancel a prior unpaid/incomplete subscription (e.g. left over from a
+    // plan toggle) so we don't pile up incomplete subscriptions.
+    if (user.stripe_subscription_id && user.subscription_status !== 'active') {
+      try { await stripe.subscriptions.cancel(user.stripe_subscription_id); } catch (_) {}
+    }
+
+    const subscription = await stripe.subscriptions.create({
+      customer: customerId,
+      items: [{ price: priceId }],
+      payment_behavior: 'default_incomplete',
+      payment_settings: {
+        save_default_payment_method: 'on_subscription',
+        // Card-only: trims Bank/Klarna/Cash App AND drops the Link box.
+        // Apple/Google Pay still appear automatically under Card.
+        // (PayPal-via-Stripe isn't available on US accounts and doesn't
+        // support recurring subscriptions — would need PayPal's own API.)
+        payment_method_types: ['card'],
+      },
+      expand: ['latest_invoice.payment_intent'],
+      metadata: { user_id: user.id },
+    });
+
+    const clientSecret = subscription.latest_invoice?.payment_intent?.client_secret;
+    if (!clientSecret) {
+      console.error('No payment_intent client_secret on subscription', subscription.id);
+      return errorResponse('Could not initialize payment', 500);
+    }
+
+    return jsonResponse({
+      subscriptionId: subscription.id,
+      clientSecret,
+    });
+  } catch (err) {
+    console.error('Create subscription error:', err.message);
+    return errorResponse(err.message || 'Failed to create subscription', 500);
+  }
 }
 
 async function handleGetUsers(env) {
@@ -2204,6 +2225,11 @@ export default {
       }
       if (path === '/api/plex/continue-watching' && method === 'GET') {
         return handleGetPlexContinueWatching(request, env);
+      }
+
+      // === SUBSCRIPTION (customer self-serve, Supabase JWT auth) ===
+      if (path === '/api/subscription/create' && method === 'POST') {
+        return handleCreateSubscription(request, env);
       }
 
       // === ADMIN ROUTES (auth required) ===

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 NovixTV web — companion site + admin dashboard for the Novix Android TV app. Three concurrent surfaces:
 
-1. **Customer site** (Home/Signup/Login/Account) — Supabase-Auth users link Plex / Jellyfin / Emby / IPTV connections to their account.
+1. **Customer site** (Home/Auth/Account) — Supabase-Auth users link Plex / Jellyfin / Emby / IPTV connections to their account. `/login` and `/signup` both render the single [frontend/src/pages/Auth.jsx](frontend/src/pages/Auth.jsx) (`initialMode` toggles the form); `/admin` renders the operator dashboard.
 2. **TV-app pairing + content backend** — `/link` page completes a device-code flow from the TV app; per-user Plex proxy endpoints feed the TV app's home screen.
 3. **Operator admin dashboard** (`/admin`) — manage paying Plex subscribers, generate Stripe checkouts, manually kick users.
 
@@ -47,19 +47,32 @@ This is the most important thing to understand before editing the worker. There 
 - `users` table is keyed to `auth.users` via `auth_id`. Created automatically by the `handle_new_user` trigger on signup ([supabase-schema.sql:222](supabase-schema.sql#L222)).
 - Connection tables (`plex_connections`, `jellyfin_connections`, `emby_connections`, `iptv_connections`) hold per-user credentials/tokens. RLS scoped to `auth.uid()`.
 - `subscription_tier` is just `'free' | 'basic'` (CHECK constraint).
-- Frontend auth in [frontend/src/lib/auth.jsx](frontend/src/lib/auth.jsx) (`AuthProvider`).
-- Worker authenticates these users by validating their Supabase JWT (`getAuthenticatedUser` helper) on `/api/plex/featured`, `/recently-added`, `/continue-watching`, and `/api/device/activate`.
+- **Billing (added):** Model A now has its own Stripe self-serve checkout — the columns `stripe_customer_id`, `stripe_subscription_id`, `subscription_status` (`none`/`active`/`past_due`/`cancelled`), and `current_period_end` are added by the additive migration [add-stripe-columns.sql](add-stripe-columns.sql) (run on the live DB; not yet folded into [supabase-schema.sql](supabase-schema.sql)). The Stripe webhook drives these — see "Customer Self-Serve Subscription Flow" below. This is the *opposite* of the original framing where Stripe meant Model B.
+- Frontend auth in [frontend/src/lib/auth.jsx](frontend/src/lib/auth.jsx) (`AuthProvider`); login/signup UI in [frontend/src/pages/Auth.jsx](frontend/src/pages/Auth.jsx). Routing is hash-free `window.location.pathname` matching in [frontend/src/App.jsx](frontend/src/App.jsx) (not a router lib).
+- Worker authenticates these users by validating their Supabase JWT (`getAuthenticatedUser` helper) on `/api/plex/featured`, `/recently-added`, `/continue-watching`, `/api/device/activate`, and `/api/subscription/create`.
 - The Plex proxy endpoints hit **the user's own Plex server** (`plex_connections.plex_server_url` + `plex_token`), not the operator's.
 
 ### Model B — Stripe-billed Plex subscribers (`/admin` dashboard, legacy)
 
 - Assumes a `users` table with `stripe_customer_id`, `plex_user_id`, `subscription_status` (`pending`/`active`/`past_due`/`cancelled`/`kicked`), and a separate `activity_log` table.
 - **None of those columns or that table exist in the current [supabase-schema.sql](supabase-schema.sql).** The admin routes will fail unless that schema is restored. Treat this as an unmigrated legacy surface — verify the live DB before working on admin endpoints.
-- Auto-kick flow: Stripe webhook `customer.subscription.deleted` → operator's `PLEX_TOKEN` removes the user's library access, then their shared-server entry, then the friend relationship; optionally deletes from Tautulli; logs to `activity_log`.
+- Auto-kick flow (legacy): operator's `PLEX_TOKEN` removes the user's library access, then their shared-server entry, then the friend relationship; optionally deletes from Tautulli; logs to `activity_log`. **Note:** the Stripe webhook handler no longer performs this auto-kick — that logic was removed when the webhook was repurposed for Model A self-serve billing. Plex removal now only happens via the admin `/api/users/:id/kick` route.
 - Tier-based library access via `LIBRARY_IDS_HD` / `LIBRARY_IDS_4K` / `LIBRARY_IDS_ADMIN` env vars (JSON arrays of local Plex library keys; Worker converts to plex.tv section IDs). These tier names (`hd`/`4k`/`admin`) are **independent** of Model A's `'free' | 'basic'`.
 - Admin-route auth: `Authorization: Bearer {ADMIN_API_KEY}` (`requireAuth` helper).
 
-When adding features, identify which model you're in. Customer-facing site or TV app → Model A. Admin dashboard or Stripe webhook → Model B.
+When adding features, identify which model you're in. Customer-facing site, TV app, **or Stripe billing/webhook** → Model A. Admin dashboard → Model B.
+
+## Customer Self-Serve Subscription Flow (Model A)
+
+Custom checkout using Stripe's **Payment Element** (not Stripe Checkout redirect). Single product, two intervals.
+
+1. Logged-in user hits `/pay` ([frontend/src/pages/Pay.jsx](frontend/src/pages/Pay.jsx)); Home's CTA routes there when authed, else `/signup`.
+2. Frontend calls `createSubscription(interval)` ([frontend/src/lib/api.js](frontend/src/lib/api.js)) with the Supabase JWT → `POST /api/subscription/create`.
+3. `handleCreateSubscription` ([worker/src/index.js](worker/src/index.js)): get-or-create the Stripe customer, cancel any leftover unpaid sub, then create a subscription with `payment_behavior: 'default_incomplete'` and `payment_method_types: ['card']`, expanding `latest_invoice.payment_intent`. Returns that PaymentIntent's `client_secret`.
+4. Frontend confirms with the Payment Element (`redirect: 'if_required'`) → navigates to `/success`.
+5. **Webhook is the source of truth** for `subscription_status` + `subscription_tier`, not the client. `handleStripeWebhook` patches the user row matched by `stripe_customer_id` (`syncByCustomer` helper): `customer.subscription.created/updated` maps Stripe status → `active`/`past_due`/`cancelled`/`none` and sets tier `basic`/`free`; `invoice.paid`/`invoice.payment_succeeded` → `active`/`basic`; `invoice.payment_failed` → `past_due`; `customer.subscription.deleted` → `cancelled`/`free`.
+
+Prices come from `STRIPE_PRICE_MONTHLY` / `STRIPE_PRICE_YEARLY` (fall back to `STRIPE_DEFAULT_PRICE_ID`). Note these differ from Model B's `STRIPE_PRICE_HD`/`STRIPE_PRICE_4K`.
 
 ## TV App Device Pairing Flow
 
@@ -83,6 +96,7 @@ Routing is a flat if/else chain at [worker/src/index.js:2113](worker/src/index.j
 
 **Supabase JWT required** (Model A — checked inside each handler via `getAuthenticatedUser`):
 - `/api/plex/{featured,recently-added,continue-watching}`
+- `/api/subscription/create` (self-serve Stripe checkout — registered just above the admin gate)
 
 **Admin bearer required** (Model B — gate at [worker/src/index.js:2210](worker/src/index.js#L2210)):
 - `/api/users` (CRUD), `/api/users/:id/{checkout,kick}`
@@ -113,7 +127,9 @@ Episode handling in the proxy endpoints is non-obvious: use `grandparentTitle` +
 
 **Worker** — set in `wrangler.toml [vars]` for dev, `wrangler secret put` for prod:
 
-- Stripe (Model B): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_DEFAULT_PRICE_ID`, `STRIPE_PRICE_HD`, `STRIPE_PRICE_4K`
+- Stripe (shared): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_DEFAULT_PRICE_ID`
+- Stripe (Model A self-serve): `STRIPE_PRICE_MONTHLY`, `STRIPE_PRICE_YEARLY`
+- Stripe (Model B legacy): `STRIPE_PRICE_HD`, `STRIPE_PRICE_4K`
 - Supabase: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY`
 - Plex (Model B operator side): `PLEX_TOKEN`, `PLEX_SERVER_URL`, `PLEX_MACHINE_ID`, `LIBRARY_IDS_HD`, `LIBRARY_IDS_4K`, `LIBRARY_IDS_ADMIN`
 - App: `ADMIN_API_KEY`, `FRONTEND_URL`
@@ -122,6 +138,7 @@ Episode handling in the proxy endpoints is non-obvious: use `grandparentTitle` +
 **Frontend** ([frontend/.env](frontend/.env)):
 - `VITE_API_URL` (worker URL, defaults to `http://localhost:8787`)
 - `VITE_API_KEY` (admin bearer for the admin dashboard)
+- `VITE_STRIPE_PUBLISHABLE_KEY` (Payment Element on `/pay`; read in [frontend/src/lib/stripe.js](frontend/src/lib/stripe.js))
 - Supabase URL/anon key (in [frontend/src/lib/supabase.js](frontend/src/lib/supabase.js))
 
 ## Known Issues

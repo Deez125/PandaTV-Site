@@ -40,7 +40,7 @@ export default function Success() {
   };
 
   const goToAccount = () => {
-    window.history.pushState({}, '', '/account');
+    window.history.pushState({}, '', '/settings');
     window.dispatchEvent(new PopStateEvent('popstate'));
   };
 

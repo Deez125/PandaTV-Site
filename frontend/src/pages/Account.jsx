@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useAuth, startPlexAuth, checkPlexAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
+import { useDebug, resolveSubscription } from '../lib/debug';
 import IptvTestModal from '../components/IptvTestModal';
 import PlexServerSelectionModal from '../components/PlexServerSelectionModal';
 import { IoMdInformationCircleOutline } from 'react-icons/io';
+import { LuUser, LuCreditCard, LuPlug, LuLink, LuCheck } from 'react-icons/lu';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8787';
 
@@ -22,30 +24,13 @@ const inputStyle = {
 const onFocus = (e) => (e.target.style.borderColor = 'var(--accent)');
 const onBlur  = (e) => (e.target.style.borderColor = 'var(--hairline-strong)');
 
-function StatusDot({ active }) {
-  return (
-    <span
-      className="inline-block w-1.5 h-1.5 rounded-full mr-1.5"
-      style={{
-        background: active ? 'var(--accent-bright)' : 'var(--fg-dim)',
-        boxShadow: active ? '0 0 8px var(--accent)' : 'none',
-        transition: 'all 0.2s ease',
-      }}
-    />
-  );
-}
-
 function StatusBadge({ active, label }) {
   return (
     <span
-      className="inline-flex items-center text-[11px] uppercase tracking-wider font-medium px-2 py-1 rounded-full"
-      style={{
-        background: active ? 'rgba(110,168,255,0.10)' : 'rgba(255,255,255,0.04)',
-        color: active ? 'var(--accent-bright)' : 'var(--fg-dim)',
-        transition: 'all 0.2s ease',
-      }}
+      className="inline-flex items-center gap-1 text-xs font-medium"
+      style={{ color: active ? '#34d399' : 'var(--fg-muted)' }}
     >
-      <StatusDot active={active} />
+      {active && <LuCheck className="w-3.5 h-3.5" strokeWidth={2.5} />}
       {label}
     </span>
   );
@@ -129,6 +114,104 @@ function Spinner({ size = 'sm' }) {
   );
 }
 
+// ─────────── Subscription tab content ───────────
+const SUB_STATUS = {
+  active:    { label: 'Active',    active: true,  blurb: 'Your subscription is active.' },
+  past_due:  { label: 'Past due',  active: false, blurb: 'Your last payment failed. Update your payment method to keep access.' },
+  cancelled: { label: 'Cancelled', active: false, blurb: 'Your subscription has ended.' },
+  none:      { label: 'No plan',   active: false, blurb: "You don't have an active subscription yet." },
+};
+
+function SubscriptionPanel({ userData, loading, navigate }) {
+  const { subOverride } = useDebug();
+
+  if (loading) {
+    return (
+      <div className="rounded-xl px-5 py-8 flex justify-center" style={{ background: 'var(--bg-elev)' }}>
+        <Spinner size="lg" />
+      </div>
+    );
+  }
+
+  const PLAN_PRICE = { month: '$3.99', year: '$34.99' };
+  const INTERVAL_LABEL = { month: 'Monthly', year: 'Yearly' };
+  const INTERVAL_UNIT = { month: '/ month', year: '/ year' };
+
+  const sub = resolveSubscription(userData, subOverride);
+  const status = sub.status;
+  const meta = SUB_STATUS[status] || SUB_STATUS.none;
+  const isPaid = status === 'active' || status === 'past_due';
+
+  const periodEnd = sub.periodEnd
+    ? new Date(sub.periodEnd).toLocaleDateString(undefined, {
+        year: 'numeric', month: 'long', day: 'numeric',
+      })
+    : null;
+
+  const intervalLabel = sub.interval ? INTERVAL_LABEL[sub.interval] : null;
+  const title = `NovixTV Access${intervalLabel ? ` · ${intervalLabel}` : ''}`;
+
+  // Compact info line: price · renewal.
+  const infoParts = [];
+  if (sub.interval) infoParts.push(`${PLAN_PRICE[sub.interval]} ${INTERVAL_UNIT[sub.interval]}`);
+  if (periodEnd) infoParts.push(`${status === 'cancelled' ? 'Access ends' : 'Renews'} ${periodEnd}`);
+  const infoLine = infoParts.join('  ·  ');
+
+  const primaryLabel = status === 'cancelled' ? 'Resubscribe' : 'Subscribe';
+  // The interval to switch to (opposite of the current one).
+  const switchTo = sub.interval === 'year' ? 'month' : 'year';
+  const btnSize = { padding: '0.4rem 0.95rem', fontSize: '0.8rem' };
+
+  return (
+    <div className="rounded-xl px-5 py-5" style={{ background: 'var(--bg-elev)' }}>
+      <div className="flex items-center justify-between gap-4 mb-4">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0 font-bold text-lg"
+               style={{ background: 'rgba(110,168,255,0.14)', color: 'var(--accent-bright)' }}>
+            N
+          </div>
+          <div className="min-w-0">
+            <div className="font-medium text-sm" style={{ color: 'var(--fg)' }}>{title}</div>
+            <div className="text-xs mt-0.5" style={{ color: 'var(--fg-muted)' }}>{meta.blurb}</div>
+          </div>
+        </div>
+        <StatusBadge active={meta.active} label={meta.label} />
+      </div>
+
+      {infoLine && (
+        <div className="text-xs mb-4 px-1" style={{ color: 'var(--fg-dim)' }}>{infoLine}</div>
+      )}
+
+      <div className="flex gap-3">
+        {isPaid ? (
+          <>
+            <button
+              onClick={() => {}}
+              className="font-semibold rounded-full transition-colors"
+              style={{ ...btnSize, background: 'var(--danger)', color: '#fff' }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#d65555')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--danger)')}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {}}
+              className="btn-primary"
+              style={btnSize}
+            >
+              Switch to {INTERVAL_LABEL[switchTo]}
+            </button>
+          </>
+        ) : (
+          <button onClick={() => navigate('/pay')} className="btn-primary" style={btnSize}>
+            {primaryLabel}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Account() {
   const { user, signOut } = useAuth();
   const [userData, setUserData] = useState(null);
@@ -138,6 +221,7 @@ export default function Account() {
   const [embyConnection, setEmbyConnection] = useState(null);
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
+  const [tab, setTab] = useState('account'); // 'account' | 'subscription' | 'services'
 
   // Plex
   const [plexConnecting, setPlexConnecting] = useState(false);
@@ -521,30 +605,65 @@ export default function Account() {
     <div className="min-h-screen text-white" style={{ background: 'var(--bg)' }}>
       {/* Header */}
       <nav className="sticky top-0 z-40" style={{ background: 'var(--bg)', borderBottom: '1px solid var(--hairline)' }}>
-        <div className="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
-          <button onClick={() => navigate('/')} className="flex items-center">
-            <Wordmark />
-          </button>
+        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
           <button
             onClick={() => navigate('/')}
             className="btn-ghost text-sm"
           >
             ← Back
           </button>
+          <button onClick={() => navigate('/')} className="flex items-center">
+            <Wordmark />
+          </button>
         </div>
       </nav>
 
       {/* Content */}
-      <div className={`max-w-3xl mx-auto px-6 py-12 ${mounted ? 'auth-enter' : 'auth-enter-pre'}`}>
-        <div className="mb-12">
+      <div className={`max-w-5xl mx-auto px-6 py-12 ${mounted ? 'auth-enter' : 'auth-enter-pre'}`}>
+        <div className="mb-10">
           <div className="eyebrow mb-3">Account</div>
           <h1 className="text-4xl font-bold tracking-tight" style={{ letterSpacing: '-0.025em' }}>
             Settings
           </h1>
         </div>
 
-        {/* ─────────── Profile ─────────── */}
-        <section className="mb-14">
+        <div className="flex flex-col sm:flex-row gap-8 md:gap-12">
+          {/* ─────────── Sidebar nav ─────────── */}
+          <aside className="sm:w-52 shrink-0">
+            <nav className="flex sm:flex-col gap-1">
+              {[
+                { id: 'account', label: 'Account', icon: LuUser },
+                { id: 'subscription', label: 'Subscription', icon: LuCreditCard },
+                { id: 'services', label: 'Connected Services', icon: LuPlug },
+                { id: 'link', label: 'Link Device', icon: LuLink, href: '/link' },
+              ].map(({ id, label, icon: Icon, href }) => {
+                const active = !href && tab === id;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => (href ? navigate(href) : setTab(id))}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-left"
+                    style={{
+                      background: active ? 'var(--surface-hover)' : 'transparent',
+                      color: active ? 'var(--fg)' : 'var(--fg-muted)',
+                    }}
+                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = 'var(--surface)'; }}
+                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" />
+                    {label}
+                  </button>
+                );
+              })}
+            </nav>
+          </aside>
+
+          {/* ─────────── Tab content ─────────── */}
+          <div className="flex-1 min-w-0">
+
+        {/* ═══════════ ACCOUNT TAB ═══════════ */}
+        {tab === 'account' && (
+        <section>
           <div className="flex items-center justify-between mb-5">
             <h2 className="text-xs uppercase tracking-[0.18em] font-medium" style={{ color: 'var(--fg-muted)' }}>
               Profile
@@ -575,11 +694,22 @@ export default function Account() {
             <GhostBtn onClick={handleLogout} danger>Sign out</GhostBtn>
           </div>
         </section>
+        )}
 
-        {/* Section divider */}
-        <div className="border-t hairline mb-10" />
+        {/* ═══════════ SUBSCRIPTION TAB ═══════════ */}
+        {tab === 'subscription' && (
+        <section>
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="text-xs uppercase tracking-[0.18em] font-medium" style={{ color: 'var(--fg-muted)' }}>
+              Subscription
+            </h2>
+          </div>
+          <SubscriptionPanel userData={userData} loading={loading} navigate={navigate} />
+        </section>
+        )}
 
-        {/* ─────────── Connected Services ─────────── */}
+        {/* ═══════════ SERVICES TAB ═══════════ */}
+        {tab === 'services' && (
         <section>
           <div className="flex items-center justify-between mb-5">
             <h2 className="text-xs uppercase tracking-[0.18em] font-medium" style={{ color: 'var(--fg-muted)' }}>
@@ -858,6 +988,10 @@ export default function Account() {
             </ConnectionRow>
           </div>
         </section>
+        )}
+
+          </div>{/* /tab content */}
+        </div>{/* /flex row */}
       </div>
 
       <IptvTestModal
