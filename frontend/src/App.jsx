@@ -8,6 +8,7 @@ import Success from './pages/Success';
 import Account from './pages/Account';
 import Link from './pages/Link';
 import Pay from './pages/Pay';
+import Help from './pages/Help';
 import NotFound from './pages/NotFound';
 import CompleteProfileModal from './components/CompleteProfileModal';
 import DebugPanel from './components/DebugPanel';
@@ -97,6 +98,8 @@ function Router() {
     content = <Link />;
   } else if (route === '/pay') {
     content = <Pay />;
+  } else if (route === '/help') {
+    content = <Help />;
   } else if (route === '/admin') {
     content = <AdminLayout />;
   } else {
@@ -115,7 +118,7 @@ function Router() {
           onComplete={handleProfileComplete}
         />
       )}
-      <DebugPanel />
+      {import.meta.env.DEV && <DebugPanel />}
     </>
   );
 }

@@ -113,11 +113,23 @@ export default function DebugPanel() {
             {(() => {
               const s = resolveSubscription(userData, subOverride);
               const paid = s.status === 'active' || s.status === 'past_due';
-              const text = `${s.status}${s.tier ? ` · ${s.tier}` : ''}${s.interval ? ` · ${s.interval}` : ''}`;
+              const PLAN = {
+                month: 'Monthly ($3.99)',
+                year: 'Yearly ($34.99)',
+              };
+              const plan = !paid ? 'Free' : (s.interval ? PLAN[s.interval] : 'Paid (interval unknown)');
+              const text = `${s.status}${s.tier ? ` · ${s.tier}` : ''}`;
               return (
-                <div style={{ color: paid ? '#34d399' : '#c8d2e0', marginBottom: '0.4rem', wordBreak: 'break-all' }}>
-                  {text}
-                </div>
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.25rem' }}>
+                    <span style={{ color: '#5a6a85' }}>plan</span>
+                    <span style={{ color: paid ? '#34d399' : '#c8d2e0', textAlign: 'right', wordBreak: 'break-all' }}>{plan}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.4rem' }}>
+                    <span style={{ color: '#5a6a85' }}>status</span>
+                    <span style={{ color: paid ? '#34d399' : '#c8d2e0', textAlign: 'right', wordBreak: 'break-all' }}>{text}</span>
+                  </div>
+                </>
               );
             })()}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>

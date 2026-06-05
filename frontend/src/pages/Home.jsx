@@ -129,7 +129,13 @@ export default function Home() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [openFaqIndex, setOpenFaqIndex] = useState(null);
   const [billing, setBilling] = useState('yearly');
+  const [mounted, setMounted] = useState(false);
   const profileMenuRef = useRef(null);
+
+  useEffect(() => {
+    const t = requestAnimationFrame(() => setMounted(true));
+    return () => cancelAnimationFrame(t);
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -156,7 +162,7 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen text-white" style={{ background: 'var(--bg)' }}>
+    <div className={`min-h-screen text-white ${mounted ? 'auth-enter' : 'auth-enter-pre'}`} style={{ background: 'var(--bg)' }}>
       {/* ─────────── Navigation ─────────── */}
       <nav className="sticky top-0 z-40" style={{ background: 'var(--bg)', borderBottom: '1px solid var(--hairline)' }}>
         <div className="max-w-6xl mx-auto px-6 py-4 relative flex items-center justify-between">
@@ -212,7 +218,7 @@ export default function Home() {
                   <button onClick={() => { setShowProfileMenu(false); navigate('/link'); }} className="menu-item">
                     <LuLink className="menu-icon" /> Link device
                   </button>
-                  <button className="menu-item">
+                  <button onClick={() => { setShowProfileMenu(false); navigate('/help'); }} className="menu-item">
                     <LuCircleHelp className="menu-icon" /> Help
                   </button>
                 </div>
@@ -248,7 +254,7 @@ export default function Home() {
           </h1>
           <p className="text-lg md:text-xl text-muted max-w-2xl mx-auto mb-10 leading-relaxed">
             Connect Plex, Jellyfin, Emby, and IPTV providers. Watch everything in one
-            unified interface — on any device, with no clutter.
+            unified interface, on any device, with no clutter.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
             <button onClick={() => document.getElementById('pricing')?.scrollIntoView({ behavior: 'smooth' })}

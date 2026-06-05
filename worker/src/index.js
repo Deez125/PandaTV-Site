@@ -580,6 +580,7 @@ async function handleStripeWebhook(request, env) {
           subscription_status: status,
           subscription_tier: active ? 'access' : 'free',
           subscription_interval: active ? interval : null,
+          subscription_cancel_at_period_end: sub.cancel_at_period_end || false,
           current_period_end: sub.current_period_end
             ? new Date(sub.current_period_end * 1000).toISOString()
             : null,
@@ -593,6 +594,7 @@ async function handleStripeWebhook(request, env) {
           subscription_status: 'cancelled',
           subscription_tier: 'free',
           subscription_interval: null,
+          subscription_cancel_at_period_end: false,
         });
         break;
       }
@@ -1235,143 +1237,103 @@ async function handleCustomerSignup(request, env) {
   return jsonResponse({ checkout_url: session.url, user_id: user.id });
 }
 
-// Change subscription plan (upgrade/downgrade) - uses Stripe's proration
+// Switch billing interval (monthly <-> yearly) for the logged-in customer.
+// Charges the prorated difference immediately and resets the cycle to now.
+// Pass { preview: true } to get the amount due without making the change.
 async function handleChangeSubscription(request, env) {
+  const user = await getAuthenticatedUser(request, env);
+  if (!user) return errorResponse('Unauthorized', 401);
+  if (!user.stripe_subscription_id) return errorResponse('No active subscription', 400);
+
   const stripe = getStripe(env);
-  const body = await request.json();
-  const { plex_user_id, new_tier } = body;
+  const body = await request.json().catch(() => ({}));
+  const interval = body?.interval === 'year' ? 'year' : 'month';
+  const preview = body?.preview === true;
 
-  if (!plex_user_id || !new_tier) {
-    return errorResponse('Missing plex_user_id or new_tier', 400);
-  }
+  const newPriceId = interval === 'year'
+    ? (env.STRIPE_PRICE_YEARLY || env.STRIPE_DEFAULT_PRICE_ID)
+    : (env.STRIPE_PRICE_MONTHLY || env.STRIPE_DEFAULT_PRICE_ID);
 
-  if (!['hd', '4k', 'admin'].includes(new_tier)) {
-    return errorResponse('Invalid tier. Must be "hd", "4k", or "admin"', 400);
-  }
-
-  // Get user
-  const users = await supabase(env, 'users', {
-    query: `plex_user_id=eq.${plex_user_id}`,
-  });
-
-  if (!users || users.length === 0) {
-    return errorResponse('User not found', 404);
-  }
-
-  const user = users[0];
-
-  // Admin tier doesn't require Stripe subscription - skip Stripe checks
-  if (new_tier !== 'admin' && user.tier !== 'admin') {
-    if (!user.stripe_subscription_id) {
-      return errorResponse('No active subscription found', 400);
-    }
-
-    // Get the subscription from Stripe
+  try {
     const subscription = await stripe.subscriptions.retrieve(user.stripe_subscription_id);
-
-    if (subscription.status !== 'active') {
-      return errorResponse('Subscription is not active', 400);
+    const item = subscription.items.data[0];
+    if (item.price.id === newPriceId) {
+      return errorResponse('Already on this plan', 409);
     }
 
-    // Get the new price ID
-    const newPriceId = new_tier === '4k' ? env.STRIPE_PRICE_4K : env.STRIPE_PRICE_HD;
+    if (preview) {
+      // What would be invoiced right now if we switched.
+      const upcoming = await stripe.invoices.retrieveUpcoming({
+        customer: subscription.customer,
+        subscription: subscription.id,
+        subscription_items: [{ id: item.id, price: newPriceId }],
+        subscription_proration_behavior: 'always_invoice',
+        subscription_billing_cycle_anchor: 'now',
+      });
+      return jsonResponse({
+        preview: true,
+        interval,
+        amount_due: upcoming.amount_due,   // cents (>=0; downgrades net to a credit -> 0)
+        currency: upcoming.currency,
+      });
+    }
 
-    // Update the subscription with proration
-    // Stripe automatically handles:
-    // - Upgrade: charges the prorated difference immediately
-    // - Downgrade: credits unused time to next invoice
+    // Execute: new plan starts now, prorated difference invoiced immediately.
     await stripe.subscriptions.update(user.stripe_subscription_id, {
-      items: [{
-        id: subscription.items.data[0].id,
-        price: newPriceId,
-      }],
-      proration_behavior: 'always_invoice', // Creates invoice immediately for upgrades
-      payment_behavior: 'error_if_incomplete', // Fail if payment doesn't go through
+      items: [{ id: item.id, price: newPriceId }],
+      proration_behavior: 'always_invoice',
+      billing_cycle_anchor: 'now',
+      payment_behavior: 'error_if_incomplete',
     });
+
+    // Optimistic DB update; the webhook will confirm with the authoritative values.
+    await supabase(env, 'users', {
+      method: 'PATCH',
+      query: `id=eq.${user.id}`,
+      body: { subscription_interval: interval },
+    });
+
+    return jsonResponse({ success: true, interval });
+  } catch (err) {
+    console.error('Change plan error:', err.message);
+    return errorResponse(err.message || 'Failed to change plan', 500);
   }
-
-  // Update user tier in database
-  await supabase(env, 'users', {
-    method: 'PATCH',
-    query: `id=eq.${user.id}`,
-    body: { tier: new_tier },
-  });
-
-  // Update Plex library access
-  const newLibraryIds = getLibraryKeysForTier(env, new_tier);
-  const libraryUpdated = await updatePlexLibraryAccess(env, plex_user_id, newLibraryIds);
-
-  const action = new_tier === '4k' ? 'Upgraded' : (new_tier === 'admin' ? 'Set to admin' : 'Downgraded');
-  await logActivity(env, user.id, 'subscription_changed', `${action} to ${new_tier} plan (${newLibraryIds.length} libraries)`);
-
-  if (!libraryUpdated) {
-    await logActivity(env, user.id, 'library_update_failed', `Failed to update Plex library access for ${new_tier} tier`);
-  }
-
-  return jsonResponse({ success: true, new_tier });
 }
 
-// Cancel subscription immediately
+// Cancel at period end (or resume a pending cancel) for the logged-in customer.
+// They keep access until current_period_end, then Stripe cancels and the webhook
+// flips them to cancelled/free.
 async function handleCancelSubscription(request, env) {
+  const user = await getAuthenticatedUser(request, env);
+  if (!user) return errorResponse('Unauthorized', 401);
+  if (!user.stripe_subscription_id) return errorResponse('No active subscription', 400);
+
   const stripe = getStripe(env);
-  const body = await request.json();
-  const { plex_user_id } = body;
+  const body = await request.json().catch(() => ({}));
+  const cancelAtPeriodEnd = body?.resume !== true;
 
-  if (!plex_user_id) {
-    return errorResponse('Missing plex_user_id', 400);
+  try {
+    const sub = await stripe.subscriptions.update(user.stripe_subscription_id, {
+      cancel_at_period_end: cancelAtPeriodEnd,
+    });
+
+    await supabase(env, 'users', {
+      method: 'PATCH',
+      query: `id=eq.${user.id}`,
+      body: { subscription_cancel_at_period_end: cancelAtPeriodEnd },
+    });
+
+    return jsonResponse({
+      success: true,
+      cancel_at_period_end: cancelAtPeriodEnd,
+      current_period_end: sub.current_period_end
+        ? new Date(sub.current_period_end * 1000).toISOString()
+        : null,
+    });
+  } catch (err) {
+    console.error('Cancel error:', err.message);
+    return errorResponse(err.message || 'Failed to update subscription', 500);
   }
-
-  // Get user
-  const users = await supabase(env, 'users', {
-    query: `plex_user_id=eq.${plex_user_id}`,
-  });
-
-  if (!users || users.length === 0) {
-    return errorResponse('User not found', 404);
-  }
-
-  const user = users[0];
-
-  // Admin accounts cannot be cancelled via this endpoint
-  if (user.tier === 'admin') {
-    return errorResponse('Admin accounts cannot be cancelled', 400);
-  }
-
-  if (!user.stripe_subscription_id) {
-    return errorResponse('No active subscription found', 400);
-  }
-
-  // Cancel the subscription immediately
-  await stripe.subscriptions.cancel(user.stripe_subscription_id);
-
-  // Update user status
-  await supabase(env, 'users', {
-    method: 'PATCH',
-    query: `id=eq.${user.id}`,
-    body: { subscription_status: 'cancelled' },
-  });
-
-  // Remove from Plex immediately
-  if (user.plex_user_id) {
-    try {
-      const result = await removePlexFriend(env, user.plex_user_id);
-      await logActivity(env, user.id, 'plex_removed', 'Removed from Plex - subscription cancelled by user');
-
-      // Log Tautulli removal
-      if (result?.tautulliResult?.success) {
-        await logActivity(env, user.id, 'tautulli_removed', 'Removed from Tautulli');
-      } else if (result?.tautulliResult) {
-        await logActivity(env, user.id, 'tautulli_removal_failed', `Failed to remove from Tautulli: ${result.tautulliResult.message}`);
-      }
-    } catch (err) {
-      console.error('Failed to remove from Plex:', err.message);
-      await logActivity(env, user.id, 'plex_removal_failed', `Failed to remove from Plex: ${err.message}`);
-    }
-  }
-
-  await logActivity(env, user.id, 'subscription_cancelled', 'Subscription cancelled by user');
-
-  return jsonResponse({ success: true });
 }
 
 // Get user subscription status (public - by plex_user_id)

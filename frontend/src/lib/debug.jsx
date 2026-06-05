@@ -24,14 +24,14 @@ export function useDebug() {
 // Returns { status, tier, interval, periodEnd } or live values from userData.
 export function resolveSubscription(userData, subOverride) {
   if (subOverride === 'none') {
-    return { status: 'none', tier: 'free', interval: null, periodEnd: null };
+    return { status: 'none', tier: 'free', interval: null, periodEnd: null, cancelAtPeriodEnd: false };
   }
   if (subOverride === 'monthly' || subOverride === 'yearly') {
     const interval = subOverride === 'yearly' ? 'year' : 'month';
     const end = new Date();
     if (interval === 'year') end.setFullYear(end.getFullYear() + 1);
     else end.setMonth(end.getMonth() + 1);
-    return { status: 'active', tier: 'access', interval, periodEnd: end.toISOString() };
+    return { status: 'active', tier: 'access', interval, periodEnd: end.toISOString(), cancelAtPeriodEnd: false };
   }
   // live
   return {
@@ -39,5 +39,6 @@ export function resolveSubscription(userData, subOverride) {
     tier: userData?.subscription_tier || 'free',
     interval: userData?.subscription_interval || null,
     periodEnd: userData?.current_period_end || null,
+    cancelAtPeriodEnd: userData?.subscription_cancel_at_period_end || false,
   };
 }

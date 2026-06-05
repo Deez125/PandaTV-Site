@@ -4,6 +4,8 @@ import { supabase } from '../lib/supabase';
 import { useDebug, resolveSubscription } from '../lib/debug';
 import IptvTestModal from '../components/IptvTestModal';
 import PlexServerSelectionModal from '../components/PlexServerSelectionModal';
+import ConfirmModal from '../components/ConfirmModal';
+import { previewSwitchPlan, switchPlan, cancelSubscription, resumeSubscription } from '../lib/api';
 import { IoMdInformationCircleOutline } from 'react-icons/io';
 import { LuUser, LuCreditCard, LuPlug, LuLink, LuCheck } from 'react-icons/lu';
 
@@ -122,8 +124,13 @@ const SUB_STATUS = {
   none:      { label: 'No plan',   active: false, blurb: "You don't have an active subscription yet." },
 };
 
-function SubscriptionPanel({ userData, loading, navigate }) {
+function SubscriptionPanel({ userData, loading, navigate, onRefresh }) {
   const { subOverride } = useDebug();
+  const [modal, setModal] = useState(null);      // null | 'cancel' | 'switch'
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState(null);
+  const [preview, setPreview] = useState(null);  // { amount_due, currency }
+  const [resuming, setResuming] = useState(false);
 
   if (loading) {
     return (
@@ -141,6 +148,7 @@ function SubscriptionPanel({ userData, loading, navigate }) {
   const status = sub.status;
   const meta = SUB_STATUS[status] || SUB_STATUS.none;
   const isPaid = status === 'active' || status === 'past_due';
+  const cancelPending = isPaid && sub.cancelAtPeriodEnd;
 
   const periodEnd = sub.periodEnd
     ? new Date(sub.periodEnd).toLocaleDateString(undefined, {
@@ -151,64 +159,169 @@ function SubscriptionPanel({ userData, loading, navigate }) {
   const intervalLabel = sub.interval ? INTERVAL_LABEL[sub.interval] : null;
   const title = `NovixTV Access${intervalLabel ? ` · ${intervalLabel}` : ''}`;
 
-  // Compact info line: price · renewal.
+  // Compact info line: price · renewal / cancel.
   const infoParts = [];
   if (sub.interval) infoParts.push(`${PLAN_PRICE[sub.interval]} ${INTERVAL_UNIT[sub.interval]}`);
-  if (periodEnd) infoParts.push(`${status === 'cancelled' ? 'Access ends' : 'Renews'} ${periodEnd}`);
+  if (periodEnd) {
+    const dateLabel = status === 'cancelled' ? 'Access ended' : cancelPending ? 'Cancels' : 'Renews';
+    infoParts.push(`${dateLabel} ${periodEnd}`);
+  }
   const infoLine = infoParts.join('  ·  ');
 
   const primaryLabel = status === 'cancelled' ? 'Resubscribe' : 'Subscribe';
-  // The interval to switch to (opposite of the current one).
   const switchTo = sub.interval === 'year' ? 'month' : 'year';
   const btnSize = { padding: '0.4rem 0.95rem', fontSize: '0.8rem' };
+  const refresh = () => onRefresh && onRefresh();
+
+  // --- actions ---
+  const openSwitch = async () => {
+    setActionError(null);
+    setBusy(true);
+    try {
+      const p = await previewSwitchPlan(switchTo);
+      setPreview(p);
+      setModal('switch');
+    } catch (e) {
+      window.alert(e.message || 'Could not load switch details.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmSwitch = async () => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await switchPlan(switchTo);
+      setModal(null);
+      setPreview(null);
+      refresh();
+    } catch (e) {
+      setActionError(e.message || 'Switch failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmCancel = async () => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await cancelSubscription();
+      setModal(null);
+      refresh();
+    } catch (e) {
+      setActionError(e.message || 'Cancel failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doResume = async () => {
+    setResuming(true);
+    try {
+      await resumeSubscription();
+      refresh();
+    } catch (e) {
+      window.alert(e.message || 'Could not resume.');
+    } finally {
+      setResuming(false);
+    }
+  };
+
+  const switchAmount = preview ? preview.amount_due : 0;
+  const switchMsg = (
+    <>
+      Switching to <strong style={{ color: 'var(--fg)' }}>{INTERVAL_LABEL[switchTo]}</strong>{' '}
+      ({PLAN_PRICE[switchTo]} {INTERVAL_UNIT[switchTo]}).{' '}
+      {switchAmount > 0 ? (
+        <>You'll be charged <strong style={{ color: 'var(--fg)' }}>${(switchAmount / 100).toFixed(2)}</strong> now,
+        prorated for the time left on your current plan.</>
+      ) : (
+        <>No charge today — a credit will be applied to your future invoices.</>
+      )}{' '}
+      The change takes effect immediately.
+    </>
+  );
 
   return (
-    <div className="rounded-xl px-5 py-5" style={{ background: 'var(--bg-elev)' }}>
-      <div className="flex items-center justify-between gap-4 mb-4">
-        <div className="flex items-center gap-4 min-w-0">
-          <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0 font-bold text-lg"
-               style={{ background: 'rgba(110,168,255,0.14)', color: 'var(--accent-bright)' }}>
-            N
+    <>
+      <div className="rounded-xl px-5 py-5" style={{ background: 'var(--bg-elev)' }}>
+        <div className="flex items-center justify-between gap-4 mb-4">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0 font-bold text-lg"
+                 style={{ background: 'rgba(110,168,255,0.14)', color: 'var(--accent-bright)' }}>
+              N
+            </div>
+            <div className="min-w-0">
+              <div className="font-medium text-sm" style={{ color: 'var(--fg)' }}>{title}</div>
+              <div className="text-xs mt-0.5" style={{ color: 'var(--fg-muted)' }}>
+                {cancelPending ? "Your subscription is set to cancel." : meta.blurb}
+              </div>
+            </div>
           </div>
-          <div className="min-w-0">
-            <div className="font-medium text-sm" style={{ color: 'var(--fg)' }}>{title}</div>
-            <div className="text-xs mt-0.5" style={{ color: 'var(--fg-muted)' }}>{meta.blurb}</div>
-          </div>
+          <StatusBadge active={meta.active} label={meta.label} />
         </div>
-        <StatusBadge active={meta.active} label={meta.label} />
-      </div>
 
-      {infoLine && (
-        <div className="text-xs mb-4 px-1" style={{ color: 'var(--fg-dim)' }}>{infoLine}</div>
-      )}
-
-      <div className="flex gap-3">
-        {isPaid ? (
-          <>
-            <button
-              onClick={() => {}}
-              className="font-semibold rounded-full transition-colors"
-              style={{ ...btnSize, background: 'var(--danger)', color: '#fff' }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#d65555')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--danger)')}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => {}}
-              className="btn-primary"
-              style={btnSize}
-            >
-              Switch to {INTERVAL_LABEL[switchTo]}
-            </button>
-          </>
-        ) : (
-          <button onClick={() => navigate('/pay')} className="btn-primary" style={btnSize}>
-            {primaryLabel}
-          </button>
+        {infoLine && (
+          <div className="text-xs mb-4 px-1" style={{ color: 'var(--fg-dim)' }}>{infoLine}</div>
         )}
+
+        <div className="flex gap-3">
+          {!isPaid ? (
+            <button onClick={() => navigate('/pay')} className="btn-primary" style={btnSize}>
+              {primaryLabel}
+            </button>
+          ) : cancelPending ? (
+            <button onClick={doResume} disabled={resuming} className="btn-primary" style={btnSize}>
+              {resuming ? 'Resuming…' : 'Resume subscription'}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={() => { setActionError(null); setModal('cancel'); }}
+                className="font-semibold rounded-full transition-colors"
+                style={{ ...btnSize, background: 'var(--danger)', color: '#fff' }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#d65555')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--danger)')}
+              >
+                Cancel
+              </button>
+              <button onClick={openSwitch} disabled={busy} className="btn-primary" style={btnSize}>
+                {busy && !modal ? 'Loading…' : `Switch to ${INTERVAL_LABEL[switchTo]}`}
+              </button>
+            </>
+          )}
+        </div>
       </div>
-    </div>
+
+      <ConfirmModal
+        open={modal === 'cancel'}
+        title="Cancel subscription?"
+        message={
+          <>You'll keep access until <strong style={{ color: 'var(--fg)' }}>{periodEnd}</strong>.
+          After that your subscription ends and you won't be charged again.</>
+        }
+        confirmLabel="Cancel subscription"
+        cancelLabel="Keep subscription"
+        confirmTone="danger"
+        loading={busy}
+        error={actionError}
+        onConfirm={confirmCancel}
+        onClose={() => setModal(null)}
+      />
+
+      <ConfirmModal
+        open={modal === 'switch'}
+        title={`Switch to ${INTERVAL_LABEL[switchTo]}?`}
+        message={switchMsg}
+        confirmLabel="Confirm switch"
+        loading={busy}
+        error={actionError}
+        onConfirm={confirmSwitch}
+        onClose={() => { setModal(null); setPreview(null); }}
+      />
+    </>
   );
 }
 
@@ -704,7 +817,7 @@ export default function Account() {
               Subscription
             </h2>
           </div>
-          <SubscriptionPanel userData={userData} loading={loading} navigate={navigate} />
+          <SubscriptionPanel userData={userData} loading={loading} navigate={navigate} onRefresh={fetchUserData} />
         </section>
         )}
 

@@ -50,6 +50,43 @@ export async function createSubscription(interval = 'month') {
   return response.json();
 }
 
+// Shared: POST to the worker authed with the user's Supabase JWT.
+async function authedPost(path, body) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) throw new Error('You must be signed in.');
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify(body || {}),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Request failed' }));
+    throw new Error(error.error || 'Request failed');
+  }
+  return response.json();
+}
+
+// Preview the prorated amount due to switch interval (makes no change).
+export function previewSwitchPlan(interval) {
+  return authedPost('/api/subscription/change', { interval, preview: true });
+}
+
+// Switch billing interval — charges the prorated difference immediately.
+export function switchPlan(interval) {
+  return authedPost('/api/subscription/change', { interval });
+}
+
+// Cancel at period end — keeps access until the renewal date.
+export function cancelSubscription() {
+  return authedPost('/api/subscription/cancel', {});
+}
+
+// Undo a pending cancellation.
+export function resumeSubscription() {
+  return authedPost('/api/subscription/cancel', { resume: true });
+}
+
 export async function getUsers() {
   return fetchApi('/api/users');
 }
