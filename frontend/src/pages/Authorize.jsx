@@ -77,8 +77,20 @@ export default function Authorize() {
     if (loading || !user || !redirectUri || handingOff) return;
     setHandingOff(true);
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { setHandingOff(false); return; }
+      // Force-refresh so we hand off a freshly-minted token pair. A stored
+      // session can have an expired access token, which the receiving app
+      // rejects (403 "Auth session missing").
+      let session = null;
+      const refreshed = await supabase.auth.refreshSession();
+      session = refreshed.data?.session || null;
+      if (!session) {
+        const current = await supabase.auth.getSession();
+        session = current.data?.session || null;
+      }
+      if (!session) {
+        setHandingOff(false);
+        return;
+      }
       const hash = `#access_token=${session.access_token}&refresh_token=${session.refresh_token}`;
       window.location.replace(redirectUri + hash);
     })();
