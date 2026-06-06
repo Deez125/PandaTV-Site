@@ -138,11 +138,12 @@ export function AuthProvider({ children }) {
   };
 
   // Sign in with OAuth provider
-  const signInWithOAuth = async (provider) => {
+  const signInWithOAuth = async (provider, redirectTo) => {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        redirectTo: `${window.location.origin}/`,
+        // Optional override lets the /authorize handoff return to itself.
+        redirectTo: redirectTo || `${window.location.origin}/`,
       },
     });
     if (error) throw error;

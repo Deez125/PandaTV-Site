@@ -9,6 +9,7 @@ import Account from './pages/Account';
 import Link from './pages/Link';
 import Pay from './pages/Pay';
 import Help from './pages/Help';
+import Authorize from './pages/Authorize';
 import NotFound from './pages/NotFound';
 import CompleteProfileModal from './components/CompleteProfileModal';
 import DebugPanel from './components/DebugPanel';
@@ -101,6 +102,8 @@ function Router() {
     content = <Pay />;
   } else if (route === '/help') {
     content = <Help />;
+  } else if (route === '/authorize') {
+    content = <Authorize />;
   } else if (route === '/admin') {
     content = <AdminLayout />;
   } else {
